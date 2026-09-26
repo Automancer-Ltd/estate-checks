@@ -41,8 +41,10 @@ jobs:
       - name: Set up actionlint
         run: |
           set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
           bash <(curl -sL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) latest "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
           actionlint --version
 
       - name: Run actionlint
