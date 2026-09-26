@@ -1,54 +1,55 @@
 #!/usr/bin/env python3
 """Generates GitHub Step Summary and outputs from Semgrep JSON results, with scan validation and call-site deduplication."""
 
+import fnmatch
 import json
 import os
 import subprocess
 import sys
 
 
-def find_in_scope_files(root: str, max_check: int = 10) -> list:
-    """Finds files in scope of the Semgrep rules in the repository."""
-    extensions = {
-        ".js", ".mjs", ".cjs", ".jsx",
-        ".ts", ".mts", ".cts", ".tsx",
-        ".py",
-        ".sh", ".bash",
-        ".yml", ".yaml",
-    }
-    ignore_dirs = {".git", "node_modules", ".venv", "venv", ".tox", "dist", "build"}
+IN_SCOPE_EXTENSIONS = {
+    ".js", ".mjs", ".cjs", ".jsx",
+    ".ts", ".mts", ".cts", ".tsx",
+    ".py",
+    ".sh", ".bash",
+    ".yml", ".yaml",
+}
+
+
+def _excluded(path: str, patterns: list) -> bool:
+    """True when any exclude pattern matches the path or one of its trailing sub-paths.
+
+    Errs towards "excluded": a wrong match can only hide a crash on a scan that had
+    nothing to scan, never fail a healthy one.
+    """
+    parts = path.split("/")
+    suffixes = ["/".join(parts[i:]) for i in range(len(parts))]
+    for pat in patterns:
+        prefix = pat[:-3] if pat.endswith("/**") else None
+        for suffix in suffixes:
+            if fnmatch.fnmatch(suffix, pat) or fnmatch.fnmatch(os.path.basename(suffix), pat):
+                return True
+            if prefix and (suffix.startswith(prefix + "/") or suffix == prefix):
+                return True
+    return False
+
+
+def find_in_scope_files(root: str, base_commit: str = "", excludes: list = None, max_check: int = 10) -> list:
+    """Files Semgrep should have scanned: changed files since the baseline on a
+    differential scan, every tracked file otherwise, minus exclusions."""
+    excludes = excludes or []
+    cmd = ["git", "diff", "--name-only", "--diff-filter=ACMR", base_commit, "HEAD"] if base_commit else ["git", "ls-files"]
+    proc = subprocess.run(cmd, cwd=root, capture_output=True, text=True, timeout=30, check=False)
+    if proc.returncode != 0:
+        # Cannot tell what should have been scanned: say so rather than guess.
+        raise RuntimeError(f"{' '.join(cmd)} failed: {proc.stderr.strip()}")
     found = []
-
-    # If git is available and repo is a git repository, git ls-files is fastest
-    try:
-        proc = subprocess.run(
-            ["git", "ls-files"],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-        )
-        if proc.returncode == 0 and proc.stdout:
-            for line in proc.stdout.splitlines():
-                _, ext = os.path.splitext(line)
-                if ext.lower() in extensions:
-                    found.append(line)
-                    if len(found) >= max_check:
-                        return found
-            return found
-    except Exception:
-        pass
-
-    # Fallback to filesystem walk
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in ignore_dirs]
-        for f in filenames:
-            _, ext = os.path.splitext(f)
-            if ext.lower() in extensions:
-                found.append(os.path.relpath(os.path.join(dirpath, f), root))
-                if len(found) >= max_check:
-                    return found
+    for line in proc.stdout.splitlines():
+        if os.path.splitext(line)[1].lower() in IN_SCOPE_EXTENSIONS and not _excluded(line, excludes):
+            found.append(line)
+            if len(found) >= max_check:
+                break
     return found
 
 
@@ -87,7 +88,12 @@ def main() -> int:
     # 2. Assert paths.scanned is not empty while repo has files in scope
     scanned = data.get("paths", {}).get("scanned", [])
     if len(scanned) == 0:
-        in_scope = find_in_scope_files(repo_root)
+        excludes = [p.strip() for p in os.environ.get("ESTATE_CHECKS_EXCLUDES", "").replace(",", "\n").splitlines() if p.strip()]
+        try:
+            in_scope = find_in_scope_files(repo_root, base_commit, excludes)
+        except Exception as e:
+            print(f"::error::Semgrep scanned 0 files and the in-scope file list could not be read: {e}", file=sys.stderr)
+            return 1
         if in_scope:
             sample = ", ".join(in_scope[:3])
             print(

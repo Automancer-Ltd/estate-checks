@@ -184,7 +184,8 @@ runs:
         fi
 
         # Validate scan, deduplicate findings by call site, and generate summary
-        python3 "$ACTION_PATH/scripts/generate-summary.py" "$RESULTS_FILE" "$IS_PR" "$BASE_COMMIT" "$PWD"
+        ESTATE_CHECKS_EXCLUDES="${INPUT_EXCLUDE_TEST_PATHS:-},${INPUT_EXCLUDE_PATHS:-}" \
+          python3 "$ACTION_PATH/scripts/generate-summary.py" "$RESULTS_FILE" "$IS_PR" "$BASE_COMMIT" "$PWD"
 
         FINDINGS_COUNT="$(python3 -c 'import json, sys; print(len(json.load(open(sys.argv[1])).get("results", [])))' "$RESULTS_FILE" 2>/dev/null || echo "0")"
 
