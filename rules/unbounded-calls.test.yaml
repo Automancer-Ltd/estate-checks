@@ -1,0 +1,79 @@
+# Unit test fixtures for workflow unbounded-calls rules
+
+name: Workflow Test Fixtures
+on: [push]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      # ======================================================================
+      # workflow-curl-no-timeout
+      # ======================================================================
+
+      - name: Unbounded single-line curl
+        # ruleid: workflow-curl-no-timeout
+        run: curl https://example.com/api/data
+
+      - name: Unbounded multi-line curl
+        run: |
+          set -euo pipefail
+          # ruleid: workflow-curl-no-timeout
+          curl -sSL https://example.com/data.tar.gz -o data.tar.gz
+          tar -xzf data.tar.gz
+
+      - name: Bounded single-line curl with -m
+        # ok: workflow-curl-no-timeout
+        run: curl -m 10 https://example.com/api/data
+
+      - name: Bounded multi-line curl with --max-time
+        run: |
+          set -euo pipefail
+          # ok: workflow-curl-no-timeout
+          curl --max-time 15 -sSL https://example.com/data.tar.gz -o data.tar.gz
+          tar -xzf data.tar.gz
+
+      - name: Bounded curl with equals sign
+        # ok: workflow-curl-no-timeout
+        run: curl --max-time=30 https://example.com/api/data
+
+      - name: Bounded curl with timeout variable
+        # ok: workflow-curl-no-timeout
+        run: curl "${CURL_TIMEOUT_ARGS[@]}" https://example.com/api/data
+
+      - name: Commented out curl
+        run: |
+          # curl https://example.com/api/data
+          # ok: workflow-curl-no-timeout
+          echo "curl is commented out"
+
+      - name: Suppressed curl
+        # nosemgrep: workflow-curl-no-timeout
+        run: curl https://example.com/api/data
+
+      # ======================================================================
+      # workflow-wget-no-timeout
+      # ======================================================================
+
+      - name: Unbounded single-line wget
+        # ruleid: workflow-wget-no-timeout
+        run: wget https://example.com/package.tar.gz
+
+      - name: Unbounded multi-line wget
+        run: |
+          set -e
+          # ruleid: workflow-wget-no-timeout
+          wget -q https://example.com/package.tar.gz
+          echo "Downloaded"
+
+      - name: Bounded wget with --timeout
+        # ok: workflow-wget-no-timeout
+        run: wget --timeout 15 https://example.com/package.tar.gz
+
+      - name: Bounded wget with --timeout=
+        # ok: workflow-wget-no-timeout
+        run: wget --timeout=15 https://example.com/package.tar.gz
+
+      - name: Bounded wget with -T
+        # ok: workflow-wget-no-timeout
+        run: wget -T 10 https://example.com/package.tar.gz

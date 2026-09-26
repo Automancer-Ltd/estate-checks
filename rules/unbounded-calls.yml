@@ -1,0 +1,384 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # JavaScript / TypeScript Rules
+  # ---------------------------------------------------------------------------
+  - id: fetch-no-signal
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      Unbounded fetch call: `fetch(...)` invoked without an `AbortSignal`.
+      A hung upstream network request will block execution indefinitely and freeze pages, workers, or CI jobs.
+      Fix: Pass `signal: AbortSignal.timeout(ms)` or an AbortController signal in options.
+    pattern-either:
+      - patterns:
+          - pattern: fetch($URL)
+      - patterns:
+          - pattern: 'fetch($URL, { ... })'
+          - pattern-not: 'fetch($URL, { ..., signal: $SIGNAL, ... })'
+          - pattern-not: 'fetch($URL, { ..., signal, ... })'
+      - patterns:
+          - pattern: window.fetch($URL)
+      - patterns:
+          - pattern: 'window.fetch($URL, { ... })'
+          - pattern-not: 'window.fetch($URL, { ..., signal: $SIGNAL, ... })'
+          - pattern-not: 'window.fetch($URL, { ..., signal, ... })'
+      - patterns:
+          - pattern: globalThis.fetch($URL)
+      - patterns:
+          - pattern: 'globalThis.fetch($URL, { ... })'
+          - pattern-not: 'globalThis.fetch($URL, { ..., signal: $SIGNAL, ... })'
+          - pattern-not: 'globalThis.fetch($URL, { ..., signal, ... })'
+
+  - id: axios-no-timeout
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      Unbounded Axios request or client: Axios invocation or `axios.create()` without `timeout`.
+      A hung HTTP request will hold connections and resources open indefinitely.
+      Fix: Provide `timeout: <milliseconds>` (or `signal: AbortSignal.timeout(ms)`) in request config or client defaults.
+    pattern-either:
+      - patterns:
+          - pattern: axios($URL)
+      - patterns:
+          - pattern: 'axios($URL, { ... })'
+          - pattern-not: 'axios($URL, { ..., timeout: $T, ... })'
+          - pattern-not: 'axios($URL, { ..., signal: $S, ... })'
+      - patterns:
+          - pattern: 'axios({ ... })'
+          - pattern-not: 'axios({ ..., timeout: $T, ... })'
+          - pattern-not: 'axios({ ..., signal: $S, ... })'
+      - patterns:
+          - pattern: axios.$METHOD($URL)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(get|delete|head|options|request)$
+      - patterns:
+          - pattern: 'axios.$METHOD($URL, { ... })'
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(get|delete|head|options|request)$
+          - pattern-not: 'axios.$METHOD($URL, { ..., timeout: $T, ... })'
+          - pattern-not: 'axios.$METHOD($URL, { ..., signal: $S, ... })'
+      - patterns:
+          - pattern: axios.$POSTMETHOD($URL, $DATA)
+          - metavariable-regex:
+              metavariable: $POSTMETHOD
+              regex: ^(post|put|patch)$
+      - patterns:
+          - pattern: 'axios.$POSTMETHOD($URL, $DATA, { ... })'
+          - metavariable-regex:
+              metavariable: $POSTMETHOD
+              regex: ^(post|put|patch)$
+          - pattern-not: 'axios.$POSTMETHOD($URL, $DATA, { ..., timeout: $T, ... })'
+          - pattern-not: 'axios.$POSTMETHOD($URL, $DATA, { ..., signal: $S, ... })'
+      - patterns:
+          - pattern: axios.create()
+      - patterns:
+          - pattern: 'axios.create({ ... })'
+          - pattern-not: 'axios.create({ ..., timeout: $T, ... })'
+          - pattern-not: 'axios.create({ ..., signal: $S, ... })'
+
+  - id: got-no-timeout
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      Unbounded Got request: `got(...)` call or instance without `timeout`.
+      A stalled upstream HTTP call will freeze async tasks indefinitely.
+      Fix: Add `timeout: { request: <ms> }` or `timeout: <ms>` in the options argument.
+    pattern-either:
+      - patterns:
+          - pattern: got($URL)
+      - patterns:
+          - pattern: 'got($URL, { ... })'
+          - pattern-not: 'got($URL, { ..., timeout: $T, ... })'
+          - pattern-not: 'got($URL, { ..., signal: $S, ... })'
+      - patterns:
+          - pattern: got.$METHOD($URL)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(get|post|put|patch|delete|head)$
+      - patterns:
+          - pattern: 'got.$METHOD($URL, { ... })'
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(get|post|put|patch|delete|head)$
+          - pattern-not: 'got.$METHOD($URL, { ..., timeout: $T, ... })'
+          - pattern-not: 'got.$METHOD($URL, { ..., signal: $S, ... })'
+      - patterns:
+          - pattern: 'got.extend({ ... })'
+          - pattern-not: 'got.extend({ ..., timeout: $T, ... })'
+          - pattern-not: 'got.extend({ ..., signal: $S, ... })'
+
+  - id: child-process-no-timeout
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      Unbounded child_process invocation: `exec`, `execFile`, or `spawnSync` called without `timeout`.
+      A hung child process permanently blocks the event loop or worker queues.
+      Fix: Pass `timeout: <milliseconds>` (or `signal`) in the options object.
+    pattern-either:
+      - patterns:
+          - pattern: child_process.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(exec|execFile|spawnSync)$
+          - pattern-not: 'child_process.$METHOD($CMD, {..., timeout: $T, ...}, ...)'
+          - pattern-not: 'child_process.$METHOD($CMD, {..., signal: $S, ...}, ...)'
+          - pattern-not: 'child_process.$METHOD($CMD, $ARGS, {..., timeout: $T, ...}, ...)'
+          - pattern-not: 'child_process.$METHOD($CMD, $ARGS, {..., signal: $S, ...}, ...)'
+      - patterns:
+          - pattern: cp.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(exec|execFile|spawnSync)$
+          - pattern-not: 'cp.$METHOD($CMD, {..., timeout: $T, ...}, ...)'
+          - pattern-not: 'cp.$METHOD($CMD, {..., signal: $S, ...}, ...)'
+          - pattern-not: 'cp.$METHOD($CMD, $ARGS, {..., timeout: $T, ...}, ...)'
+          - pattern-not: 'cp.$METHOD($CMD, $ARGS, {..., signal: $S, ...}, ...)'
+      - patterns:
+          - pattern-inside: |
+              import { ..., $METHOD, ... } from 'child_process';
+              ...
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(exec|execFile|spawnSync)$
+          - pattern: $METHOD(...)
+          - pattern-not: '$METHOD($CMD, {..., timeout: $T, ...}, ...)'
+          - pattern-not: '$METHOD($CMD, {..., signal: $S, ...}, ...)'
+          - pattern-not: '$METHOD($CMD, $ARGS, {..., timeout: $T, ...}, ...)'
+          - pattern-not: '$METHOD($CMD, $ARGS, {..., signal: $S, ...}, ...)'
+      - patterns:
+          - pattern-inside: |
+              import { ..., $METHOD, ... } from 'node:child_process';
+              ...
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(exec|execFile|spawnSync)$
+          - pattern: $METHOD(...)
+          - pattern-not: '$METHOD($CMD, {..., timeout: $T, ...}, ...)'
+          - pattern-not: '$METHOD($CMD, {..., signal: $S, ...}, ...)'
+          - pattern-not: '$METHOD($CMD, $ARGS, {..., timeout: $T, ...}, ...)'
+          - pattern-not: '$METHOD($CMD, $ARGS, {..., signal: $S, ...}, ...)'
+      - patterns:
+          - pattern-inside: |
+              const { ..., $METHOD, ... } = require('child_process');
+              ...
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(exec|execFile|spawnSync)$
+          - pattern: $METHOD(...)
+          - pattern-not: '$METHOD($CMD, {..., timeout: $T, ...}, ...)'
+          - pattern-not: '$METHOD($CMD, {..., signal: $S, ...}, ...)'
+          - pattern-not: '$METHOD($CMD, $ARGS, {..., timeout: $T, ...}, ...)'
+          - pattern-not: '$METHOD($CMD, $ARGS, {..., signal: $S, ...}, ...)'
+      - patterns:
+          - pattern-inside: |
+              const { ..., $METHOD, ... } = require('node:child_process');
+              ...
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(exec|execFile|spawnSync)$
+          - pattern: $METHOD(...)
+          - pattern-not: '$METHOD($CMD, {..., timeout: $T, ...}, ...)'
+          - pattern-not: '$METHOD($CMD, {..., signal: $S, ...}, ...)'
+          - pattern-not: '$METHOD($CMD, $ARGS, {..., timeout: $T, ...}, ...)'
+          - pattern-not: '$METHOD($CMD, $ARGS, {..., signal: $S, ...}, ...)'
+
+  - id: node-http-no-timeout
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      Unbounded node:http/https request: `http.request`, `https.request`, `http.get`, or `https.get` called without a timeout.
+      An unclosed socket will hang Node.js worker processes indefinitely.
+      Fix: Pass `timeout: <milliseconds>` (or `signal`) in options, or attach a `req.setTimeout(...)` handler.
+    pattern-either:
+      - patterns:
+          - pattern: $MOD.$METHOD($URL)
+          - metavariable-regex:
+              metavariable: $MOD
+              regex: ^(http|https)$
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(request|get)$
+          - pattern-not: '$MOD.$METHOD({ ..., timeout: $T, ... })'
+          - pattern-not: '$MOD.$METHOD({ ..., signal: $S, ... })'
+      - patterns:
+          - pattern: $MOD.$METHOD($URL, $CB)
+          - metavariable-regex:
+              metavariable: $MOD
+              regex: ^(http|https)$
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(request|get)$
+          - pattern-not: '$MOD.$METHOD({ ... }, ...)'
+          - pattern-not: '$MOD.$METHOD($URL, { ... }, ...)'
+      - patterns:
+          - pattern: '$MOD.$METHOD({ ... }, ...)'
+          - metavariable-regex:
+              metavariable: $MOD
+              regex: ^(http|https)$
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(request|get)$
+          - pattern-not: '$MOD.$METHOD({ ..., timeout: $T, ... }, ...)'
+          - pattern-not: '$MOD.$METHOD({ ..., signal: $S, ... }, ...)'
+      - patterns:
+          - pattern: '$MOD.$METHOD($URL, { ... }, ...)'
+          - metavariable-regex:
+              metavariable: $MOD
+              regex: ^(http|https)$
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(request|get)$
+          - pattern-not: '$MOD.$METHOD($URL, { ..., timeout: $T, ... }, ...)'
+          - pattern-not: '$MOD.$METHOD($URL, { ..., signal: $S, ... }, ...)'
+
+  # ---------------------------------------------------------------------------
+  # Python Rules
+  # ---------------------------------------------------------------------------
+  - id: python-requests-no-timeout
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Unbounded requests call: `requests` network call without `timeout=` or with `timeout=None`.
+      A dropped connection will block the thread indefinitely.
+      Fix: Add `timeout=<seconds>` (e.g. `timeout=10` or a tuple `(connect, read)`) to the call.
+    pattern-either:
+      - patterns:
+          - pattern: requests.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(get|post|put|delete|patch|head|options|request)$
+          - pattern-not: requests.$METHOD(..., timeout=$T, ...)
+          - pattern-not: requests.$METHOD(..., **$KWARGS)
+      - patterns:
+          - pattern: requests.$METHOD(..., timeout=None, ...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(get|post|put|delete|patch|head|options|request)$
+
+  - id: python-httpx-no-timeout
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Unbounded httpx call or client: `httpx` call or client without `timeout=` or with `timeout=None`.
+      A hanging request will freeze async/sync workers indefinitely.
+      Fix: Pass `timeout=<seconds>` (e.g. `timeout=10.0`) in the call or client initialization.
+    pattern-either:
+      - patterns:
+          - pattern: httpx.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(get|post|put|delete|patch|head|options|request)$
+          - pattern-not: httpx.$METHOD(..., timeout=$T, ...)
+          - pattern-not: httpx.$METHOD(..., **$KWARGS)
+      - patterns:
+          - pattern: httpx.$METHOD(..., timeout=None, ...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(get|post|put|delete|patch|head|options|request)$
+      - patterns:
+          - pattern: httpx.Client(...)
+          - pattern-not: httpx.Client(..., timeout=$T, ...)
+          - pattern-not: httpx.Client(..., **$KWARGS)
+      - patterns:
+          - pattern: httpx.Client(..., timeout=None, ...)
+      - patterns:
+          - pattern: httpx.AsyncClient(...)
+          - pattern-not: httpx.AsyncClient(..., timeout=$T, ...)
+          - pattern-not: httpx.AsyncClient(..., **$KWARGS)
+      - patterns:
+          - pattern: httpx.AsyncClient(..., timeout=None, ...)
+
+  - id: python-urllib-no-timeout
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Unbounded urllib call: `urllib.request.urlopen` without `timeout` or with `timeout=None`.
+      Default Python socket behavior waits indefinitely on non-responsive peers.
+      Fix: Pass `timeout=<seconds>` (e.g. `timeout=10`).
+    pattern-either:
+      - patterns:
+          - pattern: urllib.request.urlopen(...)
+          - pattern-not: urllib.request.urlopen(..., timeout=$T, ...)
+          - pattern-not: urllib.request.urlopen($URL, $DATA, $TIMEOUT, ...)
+          - pattern-not: urllib.request.urlopen(..., **$KWARGS)
+      - patterns:
+          - pattern: urllib.request.urlopen(..., timeout=None, ...)
+
+  - id: python-subprocess-no-timeout
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Unbounded subprocess call: `subprocess.run`, `check_output`, or `check_call` without `timeout=` or with `timeout=None`.
+      A blocked subprocess halts pipeline execution indefinitely.
+      Fix: Add `timeout=<seconds>` (e.g. `timeout=30`) to the invocation.
+    pattern-either:
+      - patterns:
+          - pattern: subprocess.$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(run|check_output|check_call)$
+          - pattern-not: subprocess.$METHOD(..., timeout=$T, ...)
+          - pattern-not: subprocess.$METHOD(..., **$KWARGS)
+      - patterns:
+          - pattern: subprocess.$METHOD(..., timeout=None, ...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^(run|check_output|check_call)$
+
+  # ---------------------------------------------------------------------------
+  # Shell Script Rules (.sh, .bash)
+  # ---------------------------------------------------------------------------
+  - id: shell-curl-no-timeout
+    languages: [bash, sh]
+    severity: WARNING
+    message: >-
+      Unbounded curl command: `curl` invoked without `--max-time` or `-m`.
+      A hung server or dropped connection will freeze shell scripts or CI steps until killed.
+      Fix: Add `--max-time <seconds>` or `-m <seconds>` to the curl invocation.
+    patterns:
+      - pattern: curl ...
+      - pattern-not-regex: '\bcurl\b.*(?:(--max-time(\s+|=)|-m\s*)\S+|\$[A-Za-z0-9_{]*[Tt][Ii][Mm][Ee][Oo][Uu][Tt])'
+
+  - id: shell-wget-no-timeout
+    languages: [bash, sh]
+    severity: WARNING
+    message: >-
+      Unbounded wget command: `wget` invoked without `--timeout`.
+      Stalled remote hosts will hold the download process indefinitely.
+      Fix: Add `--timeout=<seconds>` or `-T <seconds>` to the wget command.
+    patterns:
+      - pattern: wget ...
+      - pattern-not-regex: '\bwget\b.*(?:(--timeout(\s+|=)|-T\s*)\S+|\$[A-Za-z0-9_{]*[Tt][Ii][Mm][Ee][Oo][Uu][Tt])'
+
+  # ---------------------------------------------------------------------------
+  # Workflow Rules (.github/workflows/*.yml)
+  # ---------------------------------------------------------------------------
+  - id: workflow-curl-no-timeout
+    languages: [yaml]
+    severity: WARNING
+    message: >-
+      Unbounded curl command in workflow: GitHub Actions `run:` step invokes `curl` without `--max-time` or `-m`.
+      A hung request can exhaust runner minutes up to job timeout limits.
+      Fix: Add `--max-time <seconds>` or `-m <seconds>` to the curl invocation.
+    patterns:
+      - pattern-inside: |
+          run: $RUN
+      - pattern-regex: '\bcurl\b(?![^\n]*(?:(?:\s|^)(?:-m\s*\S+|--max-time(?:=|\s+)\S+)|\$[A-Za-z0-9_{]*[Tt][Ii][Mm][Ee][Oo][Uu][Tt]))'
+      - pattern-not-regex: '(?m)^[ \t]*#.*curl'
+      - pattern-not-regex: '(?m)^[ \t]*echo\s+.*curl'
+
+  - id: workflow-wget-no-timeout
+    languages: [yaml]
+    severity: WARNING
+    message: >-
+      Unbounded wget command in workflow: GitHub Actions `run:` step invokes `wget` without `--timeout`.
+      A stalled download consumes runner minutes until killed.
+      Fix: Add `--timeout=<seconds>` or `-T <seconds>` to the wget command.
+    patterns:
+      - pattern-inside: |
+          run: $RUN
+      - pattern-regex: '\bwget\b(?![^\n]*(?:(?:\s|^)(?:--timeout(?:=|\s+)\S+|-T\s*\S+)|\$[A-Za-z0-9_{]*[Tt][Ii][Mm][Ee][Oo][Uu][Tt]))'
+      - pattern-not-regex: '(?m)^[ \t]*#.*wget'
+      - pattern-not-regex: '(?m)^[ \t]*echo\s+.*wget'

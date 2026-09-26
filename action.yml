@@ -1,0 +1,144 @@
+name: 'Estate Checks'
+description: 'Enforce bounds on external network and subprocess calls across the Automancer estate'
+inputs:
+  rules-path:
+    description: 'Custom path to Semgrep rules file (defaults to bundled rules/unbounded-calls.yml)'
+    required: false
+    default: ''
+  semgrep-version:
+    description: 'Pinned Semgrep version'
+    required: false
+    default: '1.178.0'
+  baseline-commit:
+    description: 'Baseline git commit SHA to diff against on pull requests (defaults to PR base SHA)'
+    required: false
+    default: ''
+  fail-on-findings:
+    description: 'Whether findings fail the action ("auto", "true", or "false"). In auto mode, fails on pull_request, reports on push.'
+    required: false
+    default: 'auto'
+outputs:
+  findings-count:
+    description: 'Total number of reported findings'
+    value: ${{ steps.scan.outputs.findings_count }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Semgrep
+      id: setup-semgrep
+      shell: bash
+      env:
+        SEMGREP_VERSION: ${{ inputs.semgrep-version }}
+      run: |
+        set -euo pipefail
+        if command -v semgrep >/dev/null 2>&1 && [ "$(semgrep --version 2>/dev/null)" = "$SEMGREP_VERSION" ]; then
+          echo "Semgrep $SEMGREP_VERSION is already installed."
+          exit 0
+        fi
+
+        echo "Installing Semgrep $SEMGREP_VERSION..."
+        if command -v uv >/dev/null 2>&1; then
+          uv tool install "semgrep==$SEMGREP_VERSION"
+        elif command -v pipx >/dev/null 2>&1; then
+          pipx install "semgrep==$SEMGREP_VERSION"
+        elif command -v pip3 >/dev/null 2>&1; then
+          pip3 install --break-system-packages "semgrep==$SEMGREP_VERSION"
+        else
+          python3 -m pip install --break-system-packages "semgrep==$SEMGREP_VERSION"
+        fi
+
+        if [ -d "$HOME/.local/bin" ]; then
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+        fi
+
+        semgrep --version
+
+    - name: Run Unbounded Calls Check
+      id: scan
+      shell: bash
+      env:
+        INPUT_RULES_PATH: ${{ inputs.rules-path }}
+        INPUT_BASELINE_COMMIT: ${{ inputs.baseline-commit }}
+        INPUT_FAIL_ON_FINDINGS: ${{ inputs.fail-on-findings }}
+        ACTION_PATH: ${{ github.action_path }}
+        EVENT_NAME: ${{ github.event_name }}
+        EVENT_PATH: ${{ github.event_path }}
+      run: |
+        set -euo pipefail
+
+        # Resolve rules path
+        RULES_PATH="${INPUT_RULES_PATH:-$ACTION_PATH/rules/unbounded-calls.yml}"
+        if [ ! -f "$RULES_PATH" ]; then
+          echo "::error::Rules file not found at $RULES_PATH"
+          exit 1
+        fi
+
+        # Determine pull request status and baseline commit
+        IS_PR="false"
+        BASE_COMMIT="${INPUT_BASELINE_COMMIT:-}"
+
+        if [ "$EVENT_NAME" = "pull_request" ]; then
+          IS_PR="true"
+          if [ -z "$BASE_COMMIT" ] && [ -n "${EVENT_PATH:-}" ] && [ -f "$EVENT_PATH" ]; then
+            BASE_COMMIT="$(python3 -c 'import json, sys; d=json.load(open(sys.argv[1])); print(d.get("pull_request", {}).get("base", {}).get("sha", ""))' "$EVENT_PATH" 2>/dev/null || true)"
+          fi
+        fi
+
+        # Determine failure policy
+        FAIL_MODE="${INPUT_FAIL_ON_FINDINGS:-auto}"
+        if [ "$FAIL_MODE" = "auto" ]; then
+          if [ "$IS_PR" = "true" ]; then
+            SHOULD_FAIL="true"
+          else
+            SHOULD_FAIL="false"
+          fi
+        elif [ "$FAIL_MODE" = "true" ]; then
+          SHOULD_FAIL="true"
+        else
+          SHOULD_FAIL="false"
+        fi
+
+        # Build scan arguments
+        SEMGREP_ARGS=(scan --legacy --config "$RULES_PATH")
+
+        if [ -n "$BASE_COMMIT" ]; then
+          if ! git rev-parse --verify "$BASE_COMMIT^{commit}" >/dev/null 2>&1; then
+            echo "Fetching baseline commit $BASE_COMMIT..."
+            git fetch --no-tags --depth=1 origin "$BASE_COMMIT" 2>/dev/null || git fetch --unshallow 2>/dev/null || true
+          fi
+
+          if git rev-parse --verify "$BASE_COMMIT^{commit}" >/dev/null 2>&1; then
+            echo "Running differential scan against baseline commit: $BASE_COMMIT"
+            SEMGREP_ARGS+=(--baseline-commit "$BASE_COMMIT")
+          else
+            echo "::warning::Baseline commit $BASE_COMMIT could not be resolved in git history; scanning whole working tree."
+            BASE_COMMIT=""
+          fi
+        else
+          echo "Running full repository scan (no baseline commit specified)."
+        fi
+
+        RESULTS_FILE="${RUNNER_TEMP:-/tmp}/estate-checks-results-$$.json"
+        SEMGREP_ARGS+=(--json-output="$RESULTS_FILE" .)
+
+        # Run semgrep (do not exit immediately on findings so summary is generated)
+        SCAN_EXIT=0
+        semgrep "${SEMGREP_ARGS[@]}" || SCAN_EXIT=$?
+
+        # Generate summary and outputs
+        python3 "$ACTION_PATH/scripts/generate-summary.py" "$RESULTS_FILE" "$IS_PR" "$BASE_COMMIT"
+
+        FINDINGS_COUNT="$(python3 -c 'import json, sys; print(len(json.load(open(sys.argv[1])).get("results", [])))' "$RESULTS_FILE" 2>/dev/null || echo "0")"
+
+        echo "Total findings: $FINDINGS_COUNT"
+        rm -f "$RESULTS_FILE"
+
+        if [ "$SHOULD_FAIL" = "true" ] && [ "$FINDINGS_COUNT" -gt 0 ]; then
+          echo "::error::Estate check failed: $FINDINGS_COUNT unbounded outside call(s) detected."
+          exit 1
+        fi
+
+        echo "Estate check completed successfully."
+        exit 0
