@@ -73,28 +73,39 @@ jobs:
           set -euo pipefail
           python3 scripts/test-validation.py
 
-      - name: Test action fails on unresolvable baseline commit
-        id: test-unresolvable
+      - name: Warn mode — unresolvable baseline warns and does not fail
+        id: test-warn
         if: github.event_name == 'pull_request'
         continue-on-error: true
         uses: ./
         with:
           baseline-commit: '0000000000000000000000000000000000000000'
 
-      - name: Assert unresolvable baseline step failed
+      - name: Strict mode — unresolvable baseline fails
+        id: test-strict
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: ./
+        with:
+          baseline-commit: '0000000000000000000000000000000000000000'
+          fail-on-findings: 'true'
+
+      - name: Assert warn mode passed and strict mode failed
         if: github.event_name == 'pull_request'
         run: |
           set -euo pipefail
-          if [ "${{ steps.test-unresolvable.outcome }}" != "failure" ]; then
-            echo "Expected unresolvable baseline commit to fail the action, but outcome was ${{ steps.test-unresolvable.outcome }}"
+          if [ "${{ steps.test-warn.outcome }}" != "success" ]; then
+            echo "Expected the default (warn) mode to pass on a check that could not run, got ${{ steps.test-warn.outcome }}"
             exit 1
           fi
-          echo "Action failed as expected on unresolvable baseline commit."
+          if [ "${{ steps.test-strict.outcome }}" != "failure" ]; then
+            echo "Expected strict mode to fail on a check that could not run, got ${{ steps.test-strict.outcome }}"
+            exit 1
+          fi
+          echo "Warn mode warns; strict mode fails."
 
       - name: Run local action
         uses: ./
-        with:
-          fail-on-findings: 'false'
 
   ci-gate:
     name: ci gate

@@ -69,6 +69,9 @@ In frontend client applications (e.g. React/Vite single-page apps, authoring can
     exclude-paths: 'tools/**, src/ui/**, frontend/**'
 ```
 
+### Warnings, not failures
+By default (Waseem, 2026-09-27) the check never fails a job. Each finding is an inline warning annotation on the PR diff, plus a row in the job summary. A check that could not run (Semgrep crashed, the baseline was missing, the scan result was invalid) is a loud "could not run" warning, never a silent pass. Address the warnings in the PR or a follow-up. A repo can opt into blocking with `fail-on-findings: 'true'`, which also makes "could not run" fail.
+
 ### Test Files Excluded by Default
 By default, test directories and test files (`*.test.*`, `*_test.py`, `tests/**`, `__tests__/**`) are excluded from scanning. Test suites are already bounded by the test runner's global timeout (e.g. Jest, Vitest, pytest), so testing subprocesses and assertions does not require duplicate manual timeouts. To customize or disable this exclusion, override `exclude-test-paths`.
 
@@ -136,14 +139,14 @@ jobs:
 | `baseline-commit` | Baseline commit SHA to diff against on pull requests. Auto-detected from `github.event.pull_request.base.sha` on PRs. | `""` |
 | `exclude-paths` | Comma- or newline-separated paths or glob patterns to exclude from scanning (e.g. browser UI folders). | `""` |
 | `exclude-test-paths` | Comma- or newline-separated test paths or globs to exclude (set to empty to disable default test exclusions). | `'*.test.*, *_test.py, tests/**, __tests__/**'` |
-| `fail-on-findings` | Failure policy: `auto` (fail PR, report push), `true`, or `false`. | `auto` |
+| `fail-on-findings` | `false` (default): warnings only. `true`: findings and "could not run" fail the job. `auto` is a legacy alias for `false`. | `false` |
 | `rules-path` | Custom path to Semgrep rules file. | Bundled `rules/unbounded-calls.yml` |
 | `semgrep-version` | Pinned Semgrep CLI version. | `1.178.0` |
 
 ### Pull Requests vs. Default Branch Behavior
-- **Pull Requests**: The action automatically detects `github.event.pull_request.base.sha` and invokes Semgrep with `--baseline-commit`. **Only newly introduced unbounded calls fail the PR.** Existing baseline findings in the repository are ignored, enabling incremental adoption without blocking ongoing work.
+- **Pull Requests**: The action automatically detects `github.event.pull_request.base.sha` and invokes Semgrep with `--baseline-commit`. **Only newly introduced unbounded calls are reported, as warnings on the PR.** Existing baseline findings in the repository are ignored, enabling incremental adoption without blocking ongoing work.
   > [!IMPORTANT]
-  > Differential scanning requires a resolvable base commit in git history. `actions/checkout` must be configured with `fetch-depth: 0`. If the baseline commit cannot be resolved on a pull request, the action fails immediately with an actionable error rather than falling back to a full repository scan.
+  > Differential scanning requires a resolvable base commit in git history. `actions/checkout` must be configured with `fetch-depth: 0`. If the baseline commit cannot be resolved on a pull request, the action raises a "could not run" warning with the fix, rather than falling back to a full repository scan.
 - **Default Branch (`main`)**: The action scans the entire codebase and publishes a report to the GitHub Actions Job Summary without failing the build (`fail-on-findings: false`).
 
 ---
