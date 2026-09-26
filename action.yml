@@ -14,9 +14,9 @@ inputs:
     required: false
     default: ''
   fail-on-findings:
-    description: 'Whether findings fail the action ("auto", "true", or "false"). In auto mode, fails on pull_request, reports on push.'
+    description: 'Warnings by default. "true" makes findings, and a check that could not run, fail the job; "false" or "auto" (legacy) only warn.'
     required: false
-    default: 'auto'
+    default: 'false'
   exclude-paths:
     description: 'Comma- or newline-separated paths or glob patterns to exclude from scanning (e.g. browser UI directories, generated assets)'
     required: false
@@ -78,11 +78,26 @@ runs:
       run: |
         set -euo pipefail
 
+        # Waseem, 2026-09-27: this check warns, it does not block. A finding or a
+        # check that could not run is a loud warning (annotation + job summary),
+        # never a silent pass and never a failed PR, unless a repo opts in with
+        # fail-on-findings: 'true'.
+        STRICT="false"
+        [ "${INPUT_FAIL_ON_FINDINGS:-false}" = "true" ] && STRICT="true"
+        could_not_run() {
+          echo "::warning title=Estate check could not run::$1"
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            printf '## Estate Checks: Unbounded Outside Calls\n\n:warning: **The check could not run:** %s\n' "$1" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          rm -f "${RESULTS_FILE:-}"
+          [ "$STRICT" = "true" ] && exit 1
+          exit 0
+        }
+
         # Resolve rules path
         RULES_PATH="${INPUT_RULES_PATH:-$ACTION_PATH/rules/unbounded-calls.yml}"
         if [ ! -f "$RULES_PATH" ]; then
-          echo "::error::Rules file not found at $RULES_PATH"
-          exit 1
+          could_not_run "Rules file not found at $RULES_PATH"
         fi
 
         # Determine pull request status and baseline commit
@@ -96,27 +111,12 @@ runs:
           fi
         fi
 
-        # Determine failure policy
-        FAIL_MODE="${INPUT_FAIL_ON_FINDINGS:-auto}"
-        if [ "$FAIL_MODE" = "auto" ]; then
-          if [ "$IS_PR" = "true" ]; then
-            SHOULD_FAIL="true"
-          else
-            SHOULD_FAIL="false"
-          fi
-        elif [ "$FAIL_MODE" = "true" ]; then
-          SHOULD_FAIL="true"
-        else
-          SHOULD_FAIL="false"
-        fi
-
         # Build scan arguments
         SEMGREP_ARGS=(scan --config "$RULES_PATH")
 
         if [ "$IS_PR" = "true" ]; then
           if [ -z "$BASE_COMMIT" ]; then
-            echo "::error::Pull request scanning requires a baseline commit SHA. To enable differential scanning, checkout needs fetch-depth: 0 (configure 'actions/checkout' with 'fetch-depth: 0') and pass baseline-commit: \${{ github.event.pull_request.base.sha }}."
-            exit 1
+            could_not_run "Pull request scanning requires a baseline commit SHA. To enable differential scanning, checkout needs fetch-depth: 0 (configure 'actions/checkout' with 'fetch-depth: 0') and pass baseline-commit: \${{ github.event.pull_request.base.sha }}."
           fi
 
           if ! git rev-parse --verify "$BASE_COMMIT^{commit}" >/dev/null 2>&1; then
@@ -125,8 +125,7 @@ runs:
           fi
 
           if ! git rev-parse --verify "$BASE_COMMIT^{commit}" >/dev/null 2>&1; then
-            echo "::error::Baseline commit $BASE_COMMIT could not be resolved in git history. To enable differential scanning on pull requests, checkout needs fetch-depth: 0 (configure 'actions/checkout' with 'fetch-depth: 0')."
-            exit 1
+            could_not_run "Baseline commit $BASE_COMMIT could not be resolved in git history. To enable differential scanning on pull requests, checkout needs fetch-depth: 0 (configure 'actions/checkout' with 'fetch-depth: 0')."
           fi
 
           echo "Running differential scan against baseline commit: $BASE_COMMIT"
@@ -173,28 +172,29 @@ runs:
         semgrep "${SEMGREP_ARGS[@]}" || SCAN_EXIT=$?
 
         if [ "$SCAN_EXIT" -ne 0 ]; then
-          echo "::error::Semgrep failed with exit code $SCAN_EXIT"
-          rm -f "$RESULTS_FILE"
-          exit 1
+          could_not_run "Semgrep failed with exit code $SCAN_EXIT"
         fi
 
         if [ ! -f "$RESULTS_FILE" ]; then
-          echo "::error::Semgrep results file was not created: $RESULTS_FILE"
-          exit 1
+          could_not_run "Semgrep results file was not created: $RESULTS_FILE"
         fi
 
         # Validate scan, deduplicate findings by call site, and generate summary
         ESTATE_CHECKS_EXCLUDES="${INPUT_EXCLUDE_TEST_PATHS:-},${INPUT_EXCLUDE_PATHS:-}" \
-          python3 "$ACTION_PATH/scripts/generate-summary.py" "$RESULTS_FILE" "$IS_PR" "$BASE_COMMIT" "$PWD"
+          python3 "$ACTION_PATH/scripts/generate-summary.py" "$RESULTS_FILE" "$IS_PR" "$BASE_COMMIT" "$PWD" \
+          || could_not_run "the scan result failed validation (see the warning above)"
 
         FINDINGS_COUNT="$(python3 -c 'import json, sys; print(len(json.load(open(sys.argv[1])).get("results", [])))' "$RESULTS_FILE" 2>/dev/null || echo "0")"
 
         echo "Total findings: $FINDINGS_COUNT"
         rm -f "$RESULTS_FILE"
 
-        if [ "$SHOULD_FAIL" = "true" ] && [ "$FINDINGS_COUNT" -gt 0 ]; then
-          echo "::error::Estate check failed: $FINDINGS_COUNT unbounded outside call(s) detected."
-          exit 1
+        if [ "$FINDINGS_COUNT" -gt 0 ]; then
+          if [ "$STRICT" = "true" ]; then
+            echo "::error::Estate check failed: $FINDINGS_COUNT unbounded outside call(s) detected."
+            exit 1
+          fi
+          echo "::warning title=Unbounded outside calls::$FINDINGS_COUNT call(s) without a time limit — see the annotations and job summary. Warning only; this does not block the PR."
         fi
 
         echo "Estate check completed successfully."

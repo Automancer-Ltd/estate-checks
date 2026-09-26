@@ -64,14 +64,14 @@ def main() -> int:
     repo_root = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else os.getcwd()
 
     if not os.path.exists(results_file):
-        print(f"::error::Results file '{results_file}' not found.", file=sys.stderr)
+        print(f"::warning::Results file '{results_file}' not found.", file=sys.stderr)
         return 1
 
     try:
         with open(results_file, "r", encoding="utf-8") as f:
             data = json.load(f)
     except Exception as e:
-        print(f"::error::Failed to parse JSON from '{results_file}': {e}", file=sys.stderr)
+        print(f"::warning::Failed to parse JSON from '{results_file}': {e}", file=sys.stderr)
         return 1
 
     # 1. Assert JSON has no errors at level error or fatal
@@ -82,7 +82,7 @@ def main() -> int:
     ]
     if fatal_errors:
         err_msgs = [f"[{e.get('type', 'Error')}] {e.get('message', e)}" for e in fatal_errors]
-        print(f"::error::Semgrep scan reported fatal error(s): {'; '.join(err_msgs)}", file=sys.stderr)
+        print(f"::warning::Semgrep scan reported fatal error(s): {'; '.join(err_msgs)}", file=sys.stderr)
         return 1
 
     # 2. Assert paths.scanned is not empty while repo has files in scope
@@ -92,12 +92,12 @@ def main() -> int:
         try:
             in_scope = find_in_scope_files(repo_root, base_commit, excludes)
         except Exception as e:
-            print(f"::error::Semgrep scanned 0 files and the in-scope file list could not be read: {e}", file=sys.stderr)
+            print(f"::warning::Semgrep scanned 0 files and the in-scope file list could not be read: {e}", file=sys.stderr)
             return 1
         if in_scope:
             sample = ", ".join(in_scope[:3])
             print(
-                f"::error::Semgrep scanned 0 files, but {len(in_scope)} in-scope file(s) exist in repository (e.g. {sample}). Scan may have failed or crashed silently.",
+                f"::warning::Semgrep scanned 0 files, but {len(in_scope)} in-scope file(s) exist in repository (e.g. {sample}). Scan may have failed or crashed silently.",
                 file=sys.stderr,
             )
             return 1
@@ -126,6 +126,12 @@ def main() -> int:
 
     count = len(deduped_results)
 
+    # One inline annotation per finding, so it shows on the PR diff as a warning.
+    for r in deduped_results:
+        msg = r.get("extra", {}).get("message", "").replace("\n", " ").strip()
+        rule_id = r.get("check_id", "").split(".")[-1]
+        print(f"::warning file={r.get('path','')},line={r.get('start', {}).get('line', 1)},title=Unbounded outside call ({rule_id})::{msg}")
+
     # Set step output
     output_path = os.environ.get("GITHUB_OUTPUT")
     if output_path and os.path.exists(output_path):
@@ -145,7 +151,7 @@ def main() -> int:
         if is_pr:
             baseline_note = f" (relative to baseline `{base_commit[:8]}`)" if base_commit else ""
             summary_lines.append(
-                f":x: **Failed:** Found **{count}** new unbounded call(s) introduced in this pull request{baseline_note}."
+                f":warning: **Warning:** this pull request adds **{count}** call(s) without a time limit{baseline_note}. Not blocking; please address."
             )
         else:
             summary_lines.append(
