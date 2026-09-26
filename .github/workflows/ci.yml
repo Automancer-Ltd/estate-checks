@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: rule tests
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Semgrep
+        run: |
+          set -euo pipefail
+          pipx install semgrep==1.178.0
+          semgrep --version
+
+      - name: Run Semgrep rule tests
+        run: |
+          set -euo pipefail
+          semgrep --test --legacy rules/
+
+  action-lint:
+    name: action and workflow lint
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up actionlint
+        run: |
+          set -euo pipefail
+          bash <(curl -sL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) latest "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          actionlint --version
+
+      - name: Run actionlint
+        run: |
+          set -euo pipefail
+          actionlint
+
+      - name: Validate Semgrep rules syntax
+        run: |
+          set -euo pipefail
+          pipx install semgrep==1.178.0
+          semgrep --validate --config rules/unbounded-calls.yml
+
+  self-test:
+    name: self test composite action
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run local action
+        uses: ./
+        with:
+          fail-on-findings: 'false'
+
+  ci-gate:
+    name: ci gate
+    if: always()
+    needs: [test, action-lint, self-test]
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 5
+    steps:
+      - name: Assert every gate job passed or was deliberately skipped
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$RESULTS"
+          if printf '%s' "$RESULTS" | grep -qE '"result"[[:space:]]*:[[:space:]]*"(failure|cancelled|timed_out|action_required|startup_failure|neutral)"'; then
+            echo "::error::CI gate failed: a job it depends on did not pass."
+            exit 1
+          fi
+          echo "CI gate green."
