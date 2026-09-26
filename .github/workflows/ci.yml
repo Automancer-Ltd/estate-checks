@@ -68,6 +68,29 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Run scan validation and deduplication self-tests
+        run: |
+          set -euo pipefail
+          python3 scripts/test-validation.py
+
+      - name: Test action fails on unresolvable baseline commit
+        id: test-unresolvable
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: ./
+        with:
+          baseline-commit: '0000000000000000000000000000000000000000'
+
+      - name: Assert unresolvable baseline step failed
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.test-unresolvable.outcome }}" != "failure" ]; then
+            echo "Expected unresolvable baseline commit to fail the action, but outcome was ${{ steps.test-unresolvable.outcome }}"
+            exit 1
+          fi
+          echo "Action failed as expected on unresolvable baseline commit."
+
       - name: Run local action
         uses: ./
         with:

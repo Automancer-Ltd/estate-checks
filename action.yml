@@ -17,6 +17,14 @@ inputs:
     description: 'Whether findings fail the action ("auto", "true", or "false"). In auto mode, fails on pull_request, reports on push.'
     required: false
     default: 'auto'
+  exclude-paths:
+    description: 'Comma- or newline-separated paths or glob patterns to exclude from scanning (e.g. browser UI directories, generated assets)'
+    required: false
+    default: ''
+  exclude-test-paths:
+    description: 'Comma- or newline-separated test paths or glob patterns to exclude from scanning (set to empty to disable default test exclusions)'
+    required: false
+    default: '*.test.*, *_test.py, tests/**, __tests__/**'
 outputs:
   findings-count:
     description: 'Total number of reported findings'
@@ -62,6 +70,8 @@ runs:
         INPUT_RULES_PATH: ${{ inputs.rules-path }}
         INPUT_BASELINE_COMMIT: ${{ inputs.baseline-commit }}
         INPUT_FAIL_ON_FINDINGS: ${{ inputs.fail-on-findings }}
+        INPUT_EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
+        INPUT_EXCLUDE_TEST_PATHS: ${{ inputs.exclude-test-paths }}
         ACTION_PATH: ${{ github.action_path }}
         EVENT_NAME: ${{ github.event_name }}
         EVENT_PATH: ${{ github.event_path }}
@@ -101,34 +111,80 @@ runs:
         fi
 
         # Build scan arguments
-        SEMGREP_ARGS=(scan --legacy --config "$RULES_PATH")
+        SEMGREP_ARGS=(scan --config "$RULES_PATH")
 
-        if [ -n "$BASE_COMMIT" ]; then
+        if [ "$IS_PR" = "true" ]; then
+          if [ -z "$BASE_COMMIT" ]; then
+            echo "::error::Pull request scanning requires a baseline commit SHA. To enable differential scanning, checkout needs fetch-depth: 0 (configure 'actions/checkout' with 'fetch-depth: 0') and pass baseline-commit: \${{ github.event.pull_request.base.sha }}."
+            exit 1
+          fi
+
           if ! git rev-parse --verify "$BASE_COMMIT^{commit}" >/dev/null 2>&1; then
             echo "Fetching baseline commit $BASE_COMMIT..."
             git fetch --no-tags --depth=1 origin "$BASE_COMMIT" 2>/dev/null || git fetch --unshallow 2>/dev/null || true
           fi
 
-          if git rev-parse --verify "$BASE_COMMIT^{commit}" >/dev/null 2>&1; then
-            echo "Running differential scan against baseline commit: $BASE_COMMIT"
-            SEMGREP_ARGS+=(--baseline-commit "$BASE_COMMIT")
-          else
-            echo "::warning::Baseline commit $BASE_COMMIT could not be resolved in git history; scanning whole working tree."
-            BASE_COMMIT=""
+          if ! git rev-parse --verify "$BASE_COMMIT^{commit}" >/dev/null 2>&1; then
+            echo "::error::Baseline commit $BASE_COMMIT could not be resolved in git history. To enable differential scanning on pull requests, checkout needs fetch-depth: 0 (configure 'actions/checkout' with 'fetch-depth: 0')."
+            exit 1
           fi
+
+          echo "Running differential scan against baseline commit: $BASE_COMMIT"
+          SEMGREP_ARGS+=(--baseline-commit "$BASE_COMMIT")
         else
-          echo "Running full repository scan (no baseline commit specified)."
+          if [ -n "$BASE_COMMIT" ]; then
+            if git rev-parse --verify "$BASE_COMMIT^{commit}" >/dev/null 2>&1; then
+              echo "Running differential scan against baseline commit: $BASE_COMMIT"
+              SEMGREP_ARGS+=(--baseline-commit "$BASE_COMMIT")
+            else
+              echo "::warning::Baseline commit $BASE_COMMIT could not be resolved in git history; scanning whole working tree."
+              BASE_COMMIT=""
+            fi
+          else
+            echo "Running full repository scan (no baseline commit specified)."
+          fi
+        fi
+
+        # Parse and append test exclusions
+        if [ -n "${INPUT_EXCLUDE_TEST_PATHS:-}" ]; then
+          while IFS= read -r pattern; do
+            pattern="$(echo "$pattern" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            if [ -n "$pattern" ]; then
+              SEMGREP_ARGS+=(--exclude "$pattern")
+            fi
+          done < <(printf '%s\n' "$INPUT_EXCLUDE_TEST_PATHS" | tr ',' '\n')
+        fi
+
+        # Parse and append custom path exclusions
+        if [ -n "${INPUT_EXCLUDE_PATHS:-}" ]; then
+          while IFS= read -r pattern; do
+            pattern="$(echo "$pattern" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            if [ -n "$pattern" ]; then
+              SEMGREP_ARGS+=(--exclude "$pattern")
+            fi
+          done < <(printf '%s\n' "$INPUT_EXCLUDE_PATHS" | tr ',' '\n')
         fi
 
         RESULTS_FILE="${RUNNER_TEMP:-/tmp}/estate-checks-results-$$.json"
         SEMGREP_ARGS+=(--json-output="$RESULTS_FILE" .)
 
-        # Run semgrep (do not exit immediately on findings so summary is generated)
+        # Run semgrep
         SCAN_EXIT=0
         semgrep "${SEMGREP_ARGS[@]}" || SCAN_EXIT=$?
 
-        # Generate summary and outputs
-        python3 "$ACTION_PATH/scripts/generate-summary.py" "$RESULTS_FILE" "$IS_PR" "$BASE_COMMIT"
+        if [ "$SCAN_EXIT" -ne 0 ]; then
+          echo "::error::Semgrep failed with exit code $SCAN_EXIT"
+          rm -f "$RESULTS_FILE"
+          exit 1
+        fi
+
+        if [ ! -f "$RESULTS_FILE" ]; then
+          echo "::error::Semgrep results file was not created: $RESULTS_FILE"
+          exit 1
+        fi
+
+        # Validate scan, deduplicate findings by call site, and generate summary
+        python3 "$ACTION_PATH/scripts/generate-summary.py" "$RESULTS_FILE" "$IS_PR" "$BASE_COMMIT" "$PWD"
 
         FINDINGS_COUNT="$(python3 -c 'import json, sys; print(len(json.load(open(sys.argv[1])).get("results", [])))' "$RESULTS_FILE" 2>/dev/null || echo "0")"
 
