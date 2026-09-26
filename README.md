@@ -55,9 +55,28 @@ Under Automancer CI standards, **precision beats recall**: a check that produces
 
 ---
 
+## Scope: Server vs. Browser & Test Files
+
+### Priority on Server, Queues, and Workflows
+The estate checks primarily protect **backend servers, queue workers, background schedulers, and CI workflows**. An unshielded call in these environments risks indefinite hangs, frozen processing loops, blocked deployment queues, or consumed runner budgets.
+
+### Browser UI Code & Scoping
+In frontend client applications (e.g. React/Vite single-page apps, authoring canvases, or internal dashboards), calls to `fetch()` frequently query local development backends or same-origin APIs. While bounding browser fetches is good practice, repositories can cleanly scope out browser-only directories using the `exclude-paths` input without needing inline suppression comments on every UI call:
+
+```yaml
+- uses: Automancer-Ltd/estate-checks@v1
+  with:
+    exclude-paths: 'tools/**, src/ui/**, frontend/**'
+```
+
+### Test Files Excluded by Default
+By default, test directories and test files (`*.test.*`, `*_test.py`, `tests/**`, `__tests__/**`) are excluded from scanning. Test suites are already bounded by the test runner's global timeout (e.g. Jest, Vitest, pytest), so testing subprocesses and assertions does not require duplicate manual timeouts. To customize or disable this exclusion, override `exclude-test-paths`.
+
+---
+
 ## Adoption
 
-Repos adopt the check via GitHub Actions composite action.
+Repos adopt the check via the GitHub Actions composite action.
 
 ### GitHub Actions Workflow Snippet
 
@@ -85,11 +104,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # Fetch full history on pull requests so Semgrep can resolve the base commit
-          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
+          # fetch-depth: 0 is required so the PR baseline commit can be resolved for differential scanning
+          fetch-depth: 0
 
       - name: Run Estate Checks
-        uses: Automancer-Ltd/estate-checks@v1.0.0
+        uses: Automancer-Ltd/estate-checks@v1
 
   ci-gate:
     name: ci gate
@@ -110,8 +129,21 @@ jobs:
           echo "CI gate green."
 ```
 
+### Action Inputs
+
+| Input | Description | Default |
+|---|---|---|
+| `baseline-commit` | Baseline commit SHA to diff against on pull requests. Auto-detected from `github.event.pull_request.base.sha` on PRs. | `""` |
+| `exclude-paths` | Comma- or newline-separated paths or glob patterns to exclude from scanning (e.g. browser UI folders). | `""` |
+| `exclude-test-paths` | Comma- or newline-separated test paths or globs to exclude (set to empty to disable default test exclusions). | `'*.test.*, *_test.py, tests/**, __tests__/**'` |
+| `fail-on-findings` | Failure policy: `auto` (fail PR, report push), `true`, or `false`. | `auto` |
+| `rules-path` | Custom path to Semgrep rules file. | Bundled `rules/unbounded-calls.yml` |
+| `semgrep-version` | Pinned Semgrep CLI version. | `1.178.0` |
+
 ### Pull Requests vs. Default Branch Behavior
 - **Pull Requests**: The action automatically detects `github.event.pull_request.base.sha` and invokes Semgrep with `--baseline-commit`. **Only newly introduced unbounded calls fail the PR.** Existing baseline findings in the repository are ignored, enabling incremental adoption without blocking ongoing work.
+  > [!IMPORTANT]
+  > Differential scanning requires a resolvable base commit in git history. `actions/checkout` must be configured with `fetch-depth: 0`. If the baseline commit cannot be resolved on a pull request, the action fails immediately with an actionable error rather than falling back to a full repository scan.
 - **Default Branch (`main`)**: The action scans the entire codebase and publishes a report to the GitHub Actions Job Summary without failing the build (`fail-on-findings: false`).
 
 ---
@@ -143,11 +175,11 @@ curl -sS "http://localhost:8080/health"
 ## Release Process & Updates
 
 ### Releases and Tagging
-- Releases follow Semantic Versioning (e.g. `v1.0.0`).
+- Releases follow Semantic Versioning (e.g. `v1.0.1`).
 - Each release moves the corresponding major tag pointer (e.g. `v1` points to the latest `v1.x.x`).
 
 ### Automated Updates via Dependabot
-Repos pinning specific release tags (e.g. `uses: Automancer-Ltd/estate-checks@v1.0.0`) can configure Dependabot to automatically propose version bumps.
+Repos pinning specific release tags (e.g. `uses: Automancer-Ltd/estate-checks@v1.0.1`) can configure Dependabot to automatically propose version bumps.
 
 Add to `.github/dependabot.yml` in the caller repository:
 
