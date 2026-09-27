@@ -73,7 +73,7 @@ In frontend client applications (e.g. React/Vite single-page apps, authoring can
 By default (Waseem, 2026-09-27) the check never fails a job. Each finding is an inline warning annotation on the PR diff, plus a row in the job summary. A check that could not run (Semgrep crashed, the baseline was missing, the scan result was invalid) is a loud "could not run" warning, never a silent pass. Address the warnings in the PR or a follow-up. A repo can opt into blocking with `fail-on-findings: 'true'`, which also makes "could not run" fail.
 
 ### Exclusions must not hide server code
-When `exclude-paths` covers a file that looks server-side (an `/api/` route, `route.ts`, a `"use server"` action, `actions.ts`, `*.server.*`, or a `convex/`, `server/`, `workers/` or `functions/` folder), the check raises a warning naming the file. Exclude browser-only code, never server code.
+When `exclude-paths` covers a file that is recognisably server-side (a Next.js `app/api/` or `pages/api/` route, a `route.ts` under `app/`, a file declaring `"use server"`, or a `convex/`, `server/`, `workers/` or `functions/` folder), the check raises a warning naming the file. Exclude browser-only code, never server code.
 
 ### Test Files Excluded by Default
 By default, test directories and test files (`*.test.*`, `*_test.py`, `tests/**`, `__tests__/**`) are excluded from scanning. Test suites are already bounded by the test runner's global timeout (e.g. Jest, Vitest, pytest), so testing subprocesses and assertions does not require duplicate manual timeouts. To customize or disable this exclusion, override `exclude-test-paths`.
