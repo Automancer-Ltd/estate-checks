@@ -97,6 +97,19 @@ def test_diff_scan_of_excluded_change_passes() -> None:
     print("  ✓ Excluded-only change passed.")
 
 
+def test_exclusion_hiding_server_code_warns() -> None:
+    print("Testing that exclude-paths covering server code produces a warning...")
+    root, base = _diff_repo({"b.js": "x()\n"}, {"src/app/api/kg/route.ts": "export const GET = () => 1\n", "src/components/Card.tsx": "export default 1\n", "src/lib/act.ts": "\"use server\";\nexport async function a() {}\n"})
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump({"results": [], "paths": {"scanned": ["b.js"]}, "errors": []}, f)
+    env = dict(os.environ, ESTATE_CHECKS_EXCLUDE_PATHS="src/**", ESTATE_CHECKS_EXCLUDES="src/**")
+    proc = subprocess.run([sys.executable, SUMMARY_SCRIPT, f.name, "true", base, root], capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    assert "src/app/api/kg/route.ts" in proc.stdout and "src/lib/act.ts" in proc.stdout, proc.stdout
+    assert "src/components/Card.tsx" not in proc.stdout, proc.stdout
+    print("  ✓ Hidden API route and server action warned; browser component did not.")
+
+
 def test_missing_results_file_fails() -> None:
     print("Testing that missing results file fails...")
     path = os.path.join(tempfile.gettempdir(), "missing-semgrep-results-99999.json")
@@ -139,6 +152,7 @@ def main() -> int:
     test_diff_scan_of_docs_only_change_passes()
     test_diff_scan_of_code_change_that_scanned_nothing_fails()
     test_diff_scan_of_excluded_change_passes()
+    test_exclusion_hiding_server_code_warns()
     test_call_site_deduplication()
     print("\nAll self-test validation assertions passed successfully.")
     return 0

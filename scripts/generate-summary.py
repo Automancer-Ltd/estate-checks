@@ -35,6 +35,43 @@ def _excluded(path: str, patterns: list) -> bool:
     return False
 
 
+SERVER_PATH_MARKERS = ("/api/", "/server/", "/workers/", "/worker/", "/cron/", "/jobs/")
+SERVER_FILE_MARKERS = ("route.ts", "route.js", "actions.ts", "actions.js", ".server.ts", ".server.js")
+SERVER_ROOTS = ("convex/", "server/", "workers/", "api/", "functions/")
+
+
+def excluded_server_files(root: str, excludes: list, limit: int = 10) -> list:
+    """Tracked files an exclude pattern hides that look like server code.
+
+    Exclusions are for browser-only code; an API route, server action, worker or
+    backend folder hidden by one is the mistake this catches (seen on the
+    26 Sep rollout: a knowledge-graph src/** and a booking app's account/**).
+    """
+    if not excludes:
+        return []
+    proc = subprocess.run(["git", "ls-files"], cwd=root, capture_output=True, text=True, timeout=30, check=False)
+    if proc.returncode != 0:
+        return []
+    hits = []
+    for path in proc.stdout.splitlines():
+        if os.path.splitext(path)[1].lower() not in IN_SCOPE_EXTENSIONS or not _excluded(path, excludes):
+            continue
+        p = "/" + path
+        suspicious = any(m in p for m in SERVER_PATH_MARKERS) or path.endswith(SERVER_FILE_MARKERS) or path.startswith(SERVER_ROOTS)
+        if not suspicious and path.endswith((".ts", ".js", ".tsx", ".jsx", ".mjs")):
+            try:
+                with open(os.path.join(root, path), "r", encoding="utf-8", errors="ignore") as f:
+                    head = f.read(400)
+                suspicious = '"use server"' in head or "'use server'" in head
+            except OSError:
+                pass
+        if suspicious:
+            hits.append(path)
+            if len(hits) >= limit:
+                break
+    return hits
+
+
 def find_in_scope_files(root: str, base_commit: str = "", excludes: list = None, max_check: int = 10) -> list:
     """Files Semgrep should have scanned: changed files since the baseline on a
     differential scan, every tracked file otherwise, minus exclusions."""
@@ -101,6 +138,11 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
+
+    # Exclusions must never hide server code: warn, naming the files.
+    all_excludes = [p.strip() for p in os.environ.get("ESTATE_CHECKS_EXCLUDE_PATHS", "").replace(",", "\n").splitlines() if p.strip()]
+    for path in excluded_server_files(repo_root, all_excludes):
+        print(f"::warning file={path},title=exclude-paths hides server code::This file looks server-side (API route, server action, worker or backend folder) but exclude-paths skips it. Narrow exclude-paths to browser-only code.")
 
     # 3. Deduplicate findings by call site (check_id, path, line)
     raw_results = data.get("results", [])
