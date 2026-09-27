@@ -99,7 +99,7 @@ def test_diff_scan_of_excluded_change_passes() -> None:
 
 def test_exclusion_hiding_server_code_warns() -> None:
     print("Testing that exclude-paths covering server code produces a warning...")
-    root, base = _diff_repo({"b.js": "x()\n"}, {"src/app/api/kg/route.ts": "export const GET = () => 1\n", "src/components/Card.tsx": "export default 1\n", "src/lib/act.ts": "\"use server\";\nexport async function a() {}\n"})
+    root, base = _diff_repo({"b.js": "x()\n"}, {"src/app/api/kg/route.ts": "export const GET = () => 1\n", "src/components/Card.tsx": "export default 1\n", "src/lib/act.ts": "\"use server\";\nexport async function a() {}\n", "src/api/queries.ts": "import x from 'y'\n", "src/game/audioReactions.ts": "export const a = 1\n", "src/game/actions.ts": "export const b = 2\n"})
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump({"results": [], "paths": {"scanned": ["b.js"]}, "errors": []}, f)
     env = dict(os.environ, ESTATE_CHECKS_EXCLUDE_PATHS="src/**", ESTATE_CHECKS_EXCLUDES="src/**")
@@ -107,7 +107,9 @@ def test_exclusion_hiding_server_code_warns() -> None:
     assert proc.returncode == 0, proc.stderr
     assert "src/app/api/kg/route.ts" in proc.stdout and "src/lib/act.ts" in proc.stdout, proc.stdout
     assert "src/components/Card.tsx" not in proc.stdout, proc.stdout
-    print("  ✓ Hidden API route and server action warned; browser component did not.")
+    for fp in ("src/api/queries.ts", "src/game/audioReactions.ts", "src/game/actions.ts"):
+        assert fp not in proc.stdout, f"false positive on browser file {fp}: {proc.stdout}"
+    print("  ✓ Hidden API route and server action warned; browser files (component, src/api fetch layer, game actions) did not.")
 
 
 def test_missing_results_file_fails() -> None:

@@ -35,9 +35,16 @@ def _excluded(path: str, patterns: list) -> bool:
     return False
 
 
-SERVER_PATH_MARKERS = ("/api/", "/server/", "/workers/", "/worker/", "/cron/", "/jobs/")
-SERVER_FILE_MARKERS = ("route.ts", "route.js", "actions.ts", "actions.js", ".server.ts", ".server.js")
-SERVER_ROOTS = ("convex/", "server/", "workers/", "api/", "functions/")
+# Precision over recall: every marker here must mean server code. Folder names like
+# src/api/ (often a browser fetch layer) and file names like actions.ts (often game
+# logic) are NOT markers; "use server" in the file is what identifies an action.
+SERVER_PATH_MARKERS = ("/app/api/", "/pages/api/", "/server/", "/workers/", "/functions/", "/convex/")
+SERVER_ROOTS = ("app/api/", "pages/api/", "convex/", "server/", "workers/", "functions/")
+
+
+def _is_next_route(path: str) -> bool:
+    name = os.path.basename(path)
+    return name in ("route.ts", "route.js") and ("/app/" in "/" + path)
 
 
 def excluded_server_files(root: str, excludes: list, limit: int = 10) -> list:
@@ -57,7 +64,7 @@ def excluded_server_files(root: str, excludes: list, limit: int = 10) -> list:
         if os.path.splitext(path)[1].lower() not in IN_SCOPE_EXTENSIONS or not _excluded(path, excludes):
             continue
         p = "/" + path
-        suspicious = any(m in p for m in SERVER_PATH_MARKERS) or path.endswith(SERVER_FILE_MARKERS) or path.startswith(SERVER_ROOTS)
+        suspicious = any(m in p for m in SERVER_PATH_MARKERS) or path.startswith(SERVER_ROOTS) or _is_next_route(path)
         if not suspicious and path.endswith((".ts", ".js", ".tsx", ".jsx", ".mjs")):
             try:
                 with open(os.path.join(root, path), "r", encoding="utf-8", errors="ignore") as f:
