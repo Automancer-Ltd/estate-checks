@@ -13,6 +13,7 @@ Give repositories a shared CI check for outside network and subprocess calls tha
 - Warn by default. Allow callers to make findings and scan failures blocking.
 - Keep findings precise. Exclude test files by default and allow path exclusions.
 - Treat a scan that could not run as a visible warning, not a clean result.
+- Keep Python bytecode caches untracked and ignored. Script runs must not change tracked cache files.
 
 ## Module map
 
