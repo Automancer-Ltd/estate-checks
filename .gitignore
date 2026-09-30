@@ -1,0 +1,3 @@
+# Python generates these caches locally; keep source files in Git.
+__pycache__/
+*.py[cod]
