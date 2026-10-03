@@ -26,6 +26,7 @@ class ChangedFile:
     path: str
     lines: int
     previous_path: str | None = None
+    status: str = "modified"
 
 
 @dataclass
@@ -128,7 +129,8 @@ class Api:
 
 
 def _files(raw: list[dict]) -> list[ChangedFile]:
-    return [ChangedFile(f["filename"], int(f.get("additions", 0)) + int(f.get("deletions", 0)), f.get("previous_filename"))
+    return [ChangedFile(f["filename"], int(f.get("additions", 0)) + int(f.get("deletions", 0)),
+                        f.get("previous_filename"), f.get("status", "modified"))
             for f in raw]
 
 
@@ -168,29 +170,35 @@ def already_tested(api: Api, after: str, workflow_path: str, job_name: str) -> s
     return None
 
 
+@dataclass
+class Decision:
+    tier: str
+    reason: str
+    tested_tree: str | None = None  # recorded on PR runs for the later push to main
+    files: list[ChangedFile] = field(default_factory=list)
+
+
 def decide(event_name: str, event: dict, cfg: Config, api: Api, github_sha: str,
-           workflow_path: str, job_name: str, default_branch_ref: str) -> tuple[str, str, str | None]:
-    """Return (tier, reason, tested_tree). tested_tree is recorded on PR runs."""
+           workflow_path: str, job_name: str, default_branch_ref: str) -> Decision:
     if event_name == "pull_request":
         pr = event["pull_request"]
         labels = [label["name"] for label in pr.get("labels", [])]
         files = _files(api.paged(f"pulls/{pr['number']}/files"))
-        tier, reason = classify(files, cfg, labels)
-        return tier, reason, tree_of(api, github_sha)
+        return Decision(*classify(files, cfg, labels), tree_of(api, github_sha), files)
     if event_name == "push" and event.get("ref") == default_branch_ref:
         before, after = event.get("before", ""), event.get("after", "")
         if not before or set(before) == {"0"} or event.get("forced"):
-            return STANDARD, "new or force-pushed branch", None
+            return Decision(STANDARD, "new or force-pushed branch")
         skip = already_tested(api, after, workflow_path, job_name)
         if skip:
-            return NONE, skip, None
+            return Decision(NONE, skip)
         body, _ = api.get(f"compare/{before}...{after}")
         raw = body.get("files", [])  # type: ignore[union-attr]
         if len(raw) >= 300:
-            return STANDARD, "300+ files changed (compare API limit)", None
-        tier, reason = classify(_files(raw), cfg)
-        return tier, reason, None
-    return STANDARD, f"event {event_name} always runs the full suite", None
+            return Decision(STANDARD, "300+ files changed (compare API limit)")
+        files = _files(raw)
+        return Decision(*classify(files, cfg), files=files)
+    return Decision(STANDARD, f"event {event_name} always runs the full suite")
 
 
 def main(argv: list[str], environ: dict[str, str] = os.environ,
@@ -202,27 +210,29 @@ def main(argv: list[str], environ: dict[str, str] = os.environ,
         small_max_files=int(environ.get("INPUT_SMALL_MAX_FILES") or 3),
         small_max_lines=int(environ.get("INPUT_SMALL_MAX_LINES") or 50),
     )
-    tested_tree = None
     try:
         with open(environ["GITHUB_EVENT_PATH"], encoding="utf-8") as fh:
             event = json.load(fh)
         api = make_api(environ.get("GITHUB_API_URL", "https://api.github.com"),
                        environ["GITHUB_REPOSITORY"], environ["INPUT_TOKEN"])
         default_ref = "refs/heads/" + (event.get("repository", {}).get("default_branch") or "main")
-        tier, reason, tested_tree = decide(environ.get("GITHUB_EVENT_NAME", ""), event, cfg, api,
-                                           environ.get("GITHUB_SHA", ""), environ.get("GITHUB_WORKFLOW_REF", "").split("@")[0],
-                                           environ.get("INPUT_JOB_NAME", "tier"), default_ref)
+        d = decide(environ.get("GITHUB_EVENT_NAME", ""), event, cfg, api,
+                   environ.get("GITHUB_SHA", ""), environ.get("GITHUB_WORKFLOW_REF", "").split("@")[0],
+                   environ.get("INPUT_JOB_NAME") or "ci tier", default_ref)
     except Exception as exc:  # noqa: BLE001 — any surprise must fail toward running the suite
-        tier, reason = STANDARD, f"could not classify ({type(exc).__name__}: {exc}); running the full suite"
-        print(f"::warning title={NOTICE_TITLE}::{reason}")
+        d = Decision(STANDARD, f"could not classify ({type(exc).__name__}: {exc}); running the full suite")
+        print(f"::warning title={NOTICE_TITLE}::{d.reason}")
 
+    tier, reason = d.tier, d.reason
     print(f"Tier: {tier} — {reason}")
-    if tested_tree:
-        print(f"::notice title={NOTICE_TITLE}::tier={tier} tested-tree={tested_tree}")
+    if d.tested_tree:
+        print(f"::notice title={NOTICE_TITLE}::tier={tier} tested-tree={d.tested_tree}")
+    # Existing paths only: a deleted file has nothing to lint or test.
+    changed = sorted({f.path for f in d.files if f.status != "removed"})
     out = environ.get("GITHUB_OUTPUT")
     if out:
         with open(out, "a", encoding="utf-8") as fh:
-            fh.write(f"tier={tier}\nreason={reason}\n")
+            fh.write(f"tier={tier}\nreason={reason}\nchanged-files={json.dumps(changed)}\n")
     summary = environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as fh:

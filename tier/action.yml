@@ -36,6 +36,9 @@ outputs:
   reason:
     description: 'Why that tier was chosen'
     value: ${{ steps.classify.outputs.reason }}
+  changed-files:
+    description: 'JSON array of changed paths that still exist (empty when the tier needs no file list, e.g. an already-tested push)'
+    value: ${{ steps.classify.outputs.changed-files }}
 
 runs:
   using: 'composite'

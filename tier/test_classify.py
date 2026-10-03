@@ -70,7 +70,7 @@ MERGE, HEAD, BEFORE, AFTER = "m" * 40, "h" * 40, "b" * 40, "a" * 40
 TESTED_TREE, OTHER_TREE = "1" * 40, "2" * 40
 
 
-def run_main(event_name, event, routes):
+def run_main(event_name, event, routes, output="tier"):
     with tempfile.TemporaryDirectory() as tmp:
         ev, out = os.path.join(tmp, "event.json"), os.path.join(tmp, "out")
         with open(ev, "w") as fh:
@@ -83,7 +83,23 @@ def run_main(event_name, event, routes):
         }
         main([], env, make_api=lambda *_: FakeApi(routes))
         with open(out) as fh:
-            return dict(line.split("=", 1) for line in fh.read().splitlines())["tier"]
+            return dict(line.split("=", 1) for line in fh.read().splitlines())[output]
+
+
+class PullRequest(unittest.TestCase):
+    def test_core_tier_hands_over_the_files_that_still_exist(self):
+        routes = {
+            "pulls/3/files": [
+                {"filename": "app/a.ts", "additions": 2, "deletions": 1, "status": "modified"},
+                {"filename": "app/gone.ts", "additions": 0, "deletions": 9, "status": "removed"},
+                {"filename": "README.md", "additions": 1, "deletions": 0, "status": "modified"},
+            ],
+            f"git/commits/{MERGE}": {"tree": {"sha": TESTED_TREE}},
+        }
+        event = {"pull_request": {"number": 3, "labels": []}}
+        self.assertEqual(run_main("pull_request", event, routes), CORE)
+        self.assertEqual(json.loads(run_main("pull_request", event, routes, "changed-files")),
+                         ["README.md", "app/a.ts"])
 
 
 PUSH = {"ref": "refs/heads/main", "before": BEFORE, "after": AFTER, "repository": {"default_branch": "main"}}
