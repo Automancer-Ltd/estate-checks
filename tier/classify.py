@@ -239,8 +239,11 @@ def tree_of(api: Api, sha: str) -> str:
 
 
 def tested_tree_of_run(api: Api, run_id: int, job_name: str) -> str | None:
-    """The tree a passing PR run recorded in its tier job's notice annotation."""
-    jobs = api.paged(f"actions/runs/{run_id}/jobs?filter=latest", key="jobs")
+    """The tree a passing PR run recorded in its tier job's notice annotation.
+
+    All attempts: re-running failed jobs copies the tier job into the new attempt
+    without its annotations, so the record lives on the attempt that ran it."""
+    jobs = api.paged(f"actions/runs/{run_id}/jobs?filter=all", key="jobs")
     for job in jobs:
         if job.get("name") != job_name:
             continue
