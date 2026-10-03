@@ -170,6 +170,17 @@ class PushToMain(unittest.TestCase):
     def test_skips_when_main_tree_is_exactly_what_the_pr_passed(self):
         self.assertEqual(run_main("push", PUSH, push_routes(TESTED_TREE, self.code))["tier"], NONE)
 
+    def test_skips_after_a_partial_rerun_of_the_pr_run(self):
+        # Re-running failed jobs gives the latest attempt a fresh copy of the tier
+        # job with no annotation; the tested tree lives on the first attempt's job.
+        routes = push_routes(TESTED_TREE, self.code)
+        del routes["actions/runs/99/jobs"]
+        routes = {"actions/runs/99/jobs?filter=latest": {"jobs": [{"name": "ci tier", "id": 6}]},
+                  "actions/runs/99/jobs?filter=all": {"jobs": [{"name": "ci tier", "id": 6},
+                                                               {"name": "ci tier", "id": 5}]},
+                  "check-runs/6/annotations": [], **routes}
+        self.assertEqual(run_main("push", PUSH, routes)["tier"], NONE)
+
     def test_runs_the_change_tier_when_main_moved_since_the_pr_run(self):
         self.assertEqual(run_main("push", PUSH, push_routes(OTHER_TREE, self.code))["tier"], STANDARD)
 
