@@ -4,6 +4,8 @@ Shared mechanical CI checks for the Automancer estate, centralized in a single r
 
 The check inspects code for **unbounded outside network and subprocess calls**—the estate's most repeated failure pattern, where an unconstrained supplier call, hanging HTTP request, or blocked subprocess halts a background job, locks an event loop, freezes a user-facing page, or consumes entire CI runner quotas.
 
+The repository also ships [`tier`](tier/README.md), a second action that decides how much CI a change needs (none, core or standard) so docs-only changes and already-tested merges skip the suite.
+
 ---
 
 ## What the Check Catches

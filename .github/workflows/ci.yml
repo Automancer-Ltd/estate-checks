@@ -73,6 +73,11 @@ jobs:
           set -euo pipefail
           python3 scripts/test-validation.py
 
+      - name: Run CI tier classifier tests
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tier -v
+
       - name: Warn mode — unresolvable baseline warns and does not fail
         id: test-warn
         if: github.event_name == 'pull_request'

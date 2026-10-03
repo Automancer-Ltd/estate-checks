@@ -1,0 +1,54 @@
+name: 'Estate CI tier'
+description: 'Choose how much CI a change needs (none, core, standard) so CI effort matches what was touched'
+inputs:
+  docs-paths:
+    description: 'Comma- or newline-separated globs for documentation that ships nothing and that no test or script reads. Empty means nothing counts as docs.'
+    required: false
+    default: ''
+  docs-exclude:
+    description: 'Globs inside docs-paths that a test or script DOES read; changing them needs CI.'
+    required: false
+    default: ''
+  full-paths:
+    description: 'Globs that always need the full suite (lockfiles, CI files, migrations, auth, deploy scripts).'
+    required: false
+    default: ''
+  small-max-files:
+    description: 'A change of at most this many non-doc files (and small-max-lines) runs the core tier.'
+    required: false
+    default: '3'
+  small-max-lines:
+    description: 'A change of at most this many changed non-doc lines (and small-max-files) runs the core tier.'
+    required: false
+    default: '50'
+  job-name:
+    description: "The display name of the job calling this action. On a push to the default branch it is how the action finds what the merged PR's run tested."
+    required: false
+    default: 'ci tier'
+  token:
+    description: 'Token with contents, pull-requests, actions and checks read access.'
+    required: false
+    default: ${{ github.token }}
+outputs:
+  tier:
+    description: 'none | core | standard'
+    value: ${{ steps.classify.outputs.tier }}
+  reason:
+    description: 'Why that tier was chosen'
+    value: ${{ steps.classify.outputs.reason }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Classify the change
+      id: classify
+      shell: bash
+      env:
+        INPUT_DOCS_PATHS: ${{ inputs.docs-paths }}
+        INPUT_DOCS_EXCLUDE: ${{ inputs.docs-exclude }}
+        INPUT_FULL_PATHS: ${{ inputs.full-paths }}
+        INPUT_SMALL_MAX_FILES: ${{ inputs.small-max-files }}
+        INPUT_SMALL_MAX_LINES: ${{ inputs.small-max-lines }}
+        INPUT_JOB_NAME: ${{ inputs.job-name }}
+        INPUT_TOKEN: ${{ inputs.token }}
+      run: python3 "$GITHUB_ACTION_PATH/classify.py"
