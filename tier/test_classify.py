@@ -122,6 +122,19 @@ class PullRequest(unittest.TestCase):
         repo = {"docs/plans/a.md": "", "README.md": "", "app/x.ts": "// see docs/plans/b.md\n"}
         self.assertEqual(run_main("pull_request", event, routes, repo)["tier"], NONE)
 
+    def test_docs_only_cited_in_comments_still_run_nothing(self):
+        event, routes = pr([changed("docs/RUNBOOK.md", 4), changed("AGENTS.md", 2)])
+        repo = {"docs/RUNBOOK.md": "", "AGENTS.md": "",
+                "src/db.ts": "// See docs/RUNBOOK.md for the restore drill.\nexport const x = 1;\n",
+                ".env.example": "# documented in AGENTS.md\nAPI_URL=\n",
+                ".github/workflows/ci.yml": "    # AGENTS.md says why\n    run: pnpm test\n"}
+        self.assertEqual(run_main("pull_request", event, routes, repo)["tier"], NONE)
+
+    def test_doc_a_script_reads_on_a_code_line_is_code(self):
+        event, routes = pr([changed("docs/RUNBOOK.md", 4)])
+        repo = {"docs/RUNBOOK.md": "", "scripts/check.sh": "# check the runbook\ngrep -q drill docs/RUNBOOK.md\n"}
+        self.assertEqual(run_main("pull_request", event, routes, repo)["tier"], CORE)
+
     def test_doc_a_test_reads_by_path_is_code(self):
         event, routes = pr([changed("docs/schema-classification.md", 2)])
         repo = {"docs/schema-classification.md": "",
@@ -173,6 +186,21 @@ class PullRequest(unittest.TestCase):
         result = run_main("pull_request", event, routes, repo, {"INPUT_CORE_MAX_TESTS": "2"})
         self.assertEqual(result["tier"], STANDARD)
         self.assertEqual(json.loads(result["direct-tests"]), [])
+
+    def test_core_tier_finds_tests_beside_or_relatively_importing_the_change(self):
+        event, routes = pr([changed("tools/site/build.mjs", 3), changed("deploy.json", 2)])
+        repo = {
+            "tools/site/build.mjs": "", "deploy.json": "{}",
+            "tools/site/build.test.js": "test('x', () => {});\n",
+            "tools/site/__tests__/render.test.js": 'import { build } from "../build.mjs";\n',
+            "tests/deploy-config.test.ts": 'const cfg = read("deploy.json");\n',
+            "tests/deploy-script.test.ts": 'run("scripts/deploy.sh");\n',
+        }
+        result = run_main("pull_request", event, routes, repo)
+        self.assertEqual(result["tier"], CORE)
+        self.assertEqual(json.loads(result["direct-tests"]),
+                         ["tests/deploy-config.test.ts", "tools/site/__tests__/render.test.js",
+                          "tools/site/build.test.js"])
 
 
 PUSH = {"ref": "refs/heads/main", "before": BEFORE, "after": AFTER, "repository": {"default_branch": "main"}}

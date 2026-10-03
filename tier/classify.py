@@ -65,6 +65,9 @@ GENERIC_DOC_NAMES = {
     "todo.md", "plan.md", "summary.md", "report.md", "design.md",
 }
 DOC_SUFFIXES = (".md", ".rst")
+# These list paths for a tool to skip or allow; they never read a doc's content.
+NOT_READERS = {".gitignore", ".gitattributes", ".dockerignore", ".npmignore", ".prettierignore",
+               ".eslintignore", ".gitleaks.toml", ".gitleaksignore", "CODEOWNERS"}
 MAX_SCAN_BYTES = 2_000_000
 DEFAULT_TEST_GLOBS = ["**/*.test.*", "**/*.spec.*", "**/*_test.*", "**/test_*.py", "**/__tests__/**"]
 # A module with one of these names is imported by its folder: `engine/effects`.
@@ -191,7 +194,7 @@ def docs_read_by_code(docs: list[str], root: str, tracked: list[str]) -> dict[st
     wanted = {d: reader_patterns(d) for d in docs}
     found: dict[str, str] = {}
     for rel in tracked:
-        if rel.endswith(DOC_SUFFIXES) or len(found) == len(wanted):
+        if rel.endswith(DOC_SUFFIXES) or os.path.basename(rel) in NOT_READERS or len(found) == len(wanted):
             continue
         full = os.path.join(root, rel)
         try:
@@ -203,42 +206,77 @@ def docs_read_by_code(docs: list[str], root: str, tracked: list[str]) -> dict[st
             continue
         if b"\0" in raw:
             continue
-        text = raw.decode("utf-8", "replace")
+        text = code_lines(raw.decode("utf-8", "replace"))
         for doc, pats in wanted.items():
             if doc not in found and any(lit in text and rx.search(text) for lit, rx in pats):
                 found[doc] = rel
     return found
 
 
+# A line that starts with one of these is a comment in the languages the estate
+# uses. A comment citing `docs/RUNBOOK.md` does not read it; `readFileSync(...)`
+# or `cat docs/x.md` never starts a line with one of these.
+COMMENT_PREFIXES = ("//", "#", "*", "/*", "<!--")
+
+
+def code_lines(text: str) -> str:
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith(COMMENT_PREFIXES))
+
+
 def reference_keys(path: str) -> list[str]:
-    """How a test imports `path`: `folder/name` (or `parent/folder` for an index)."""
+    """How a test imports `path`: `folder/name` (or `parent/folder` for an index);
+    a root file by its full name (`deploy.json`), never a bare word like `deploy`."""
     parts = path.split("/")
     stem = parts[-1].split(".")[0]
     dirs = parts[:-1]
+    if not dirs:
+        return [parts[-1]]
     key_parts = dirs[-2:] if stem in FOLDER_MODULES else dirs[-1:] + [stem]
-    if not key_parts:
-        return []
     slash = "/".join(key_parts)
     return [slash, ".".join(key_parts)] if len(key_parts) > 1 else [slash]
 
 
-def direct_tests(changed: list[str], tracked: list[str], test_globs: list[str], root: str) -> list[str]:
-    """The tests that name a changed file by folder and name, plus changed tests.
+RELATIVE_IMPORT = re.compile(r"""["'](\.{1,2}/[^"'\s]+)["']""")
 
-    Following every import (vitest related, jest --findRelatedTests) selects most
-    of a suite when a small change touches a widely imported module: in
-    dungeon-master a one-line change to convex/lib/costEnvelope.ts ran past six
-    minutes on one runner (2026-10-03). Typecheck covers every other caller, and
-    the full suite runs on the next standard change.
+
+def _imports(test: str, text: str, targets: set[str]) -> bool:
+    """Does `test` import a target by a relative path (`./build`, `../lib/x.mjs`)?"""
+    base = os.path.dirname(test)
+    for spec in RELATIVE_IMPORT.findall(text):
+        resolved = os.path.normpath(os.path.join(base, spec))
+        if resolved in targets or os.path.splitext(resolved)[0] in targets:
+            return True
+    return False
+
+
+def direct_tests(changed: list[str], tracked: list[str], test_globs: list[str], root: str) -> list[str]:
+    """The tests that name a changed file, plus changed tests.
+
+    A test names a file by folder and name (`lib/costEnvelope`), by a relative
+    import that resolves to it (`./build`), or by sitting beside it as
+    `<name>.test.*`. Following every import (vitest related, jest
+    --findRelatedTests) selects most of a suite when a small change touches a
+    widely imported module: in dungeon-master a one-line change to
+    convex/lib/costEnvelope.ts ran past six minutes on one runner (2026-10-03).
+    Typecheck covers every other caller, and the full suite runs on the next
+    standard change.
     """
     globs = [glob_to_regex(g) for g in test_globs]
     tests = [t for t in tracked if any(g.match(t) for g in globs)]
     test_set = set(tests)
     chosen = {c for c in changed if c in test_set}
+    sources = [c for c in changed if c not in chosen]
     patterns = [(k, re.compile(r"(?<![\w-])" + re.escape(k) + r"(?![\w-])"))
-                for c in changed if c not in chosen for k in reference_keys(c)]
+                for c in sources for k in reference_keys(c)]
+    targets = {os.path.splitext(c)[0] for c in sources} | set(sources)
+    targets |= {os.path.dirname(c) for c in sources if os.path.basename(c).split(".")[0] in FOLDER_MODULES}
+    beside = {(os.path.dirname(c), os.path.basename(c).split(".")[0] + ".") for c in sources}
     for t in tests:
-        if t in chosen or not patterns:
+        if t in chosen or not sources:
+            continue
+        t_dir, t_name = os.path.dirname(t), os.path.basename(t)
+        if any(t_dir in (d, f"{d}/__tests__".lstrip("/")) and t_name.startswith(s) for d, s in beside):
+            chosen.add(t)
             continue
         try:
             path = os.path.join(root, t)
@@ -248,7 +286,7 @@ def direct_tests(changed: list[str], tracked: list[str], test_globs: list[str], 
                 text = fh.read()
         except OSError:
             continue
-        if any(k in text and rx.search(text) for k, rx in patterns):
+        if any(k in text and rx.search(text) for k, rx in patterns) or _imports(t, text, targets):
             chosen.add(t)
     return sorted(chosen)
 
