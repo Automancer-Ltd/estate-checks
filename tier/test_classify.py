@@ -202,6 +202,16 @@ class PullRequest(unittest.TestCase):
                          ["tests/deploy-config.test.ts", "tools/site/__tests__/render.test.js",
                           "tools/site/build.test.js"])
 
+    def test_a_dotfile_names_only_the_tests_that_name_it(self):
+        event, routes = pr([changed("config/.release-notes.json", 2), changed(".notes.json", 1)])
+        repo = {
+            "config/.release-notes.json": "{}", ".notes.json": "{}",
+            "tests/notes.test.ts": 'read("config/.release-notes.json"); read(".notes.json");\n',
+            "tests/other.test.ts": 'readdirSync("config/");\n',
+        }
+        result = run_main("pull_request", event, routes, repo)
+        self.assertEqual(json.loads(result["direct-tests"]), ["tests/notes.test.ts"])
+
 
 PUSH = {"ref": "refs/heads/main", "before": BEFORE, "after": AFTER, "repository": {"default_branch": "main"}}
 
