@@ -41,6 +41,12 @@ Give repositories a shared CI check for outside network and subprocess calls tha
 - State: built
 - Shaped by: The rule fixtures, validation tests, and the composite action's public inputs.
 
+### CI tier action (`tier/`)
+
+- What it does: Classifies a pull request or default-branch push as `none`, `core` or `standard` from the changed files, per-repo docs and full-suite globs, and size limits. On a default-branch push it skips when the pushed tree equals the tree the merged PR's passing run recorded. Any failure resolves to `standard`.
+- State: built
+- Shaped by: Waseem's proportionate-CI decisions of 2026-10-03 (`auto/plans/ci-proportionate-2026-10-03.md`) and the cases in `tier/test_classify.py`.
+
 ## Open decisions
 
 No open decisions are recorded in this repository.
