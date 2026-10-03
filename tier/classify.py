@@ -66,6 +66,9 @@ GENERIC_DOC_NAMES = {
 }
 DOC_SUFFIXES = (".md", ".rst")
 MAX_SCAN_BYTES = 2_000_000
+DEFAULT_TEST_GLOBS = ["**/*.test.*", "**/*.spec.*", "**/*_test.*", "**/test_*.py", "**/__tests__/**"]
+# A module with one of these names is imported by its folder: `engine/effects`.
+FOLDER_MODULES = {"index", "__init__", "mod", "main"}
 
 
 @dataclass
@@ -75,10 +78,13 @@ class Config:
     full: list[str] = field(default_factory=lambda: list(DEFAULT_FULL))
     small_max_files: int = 3
     small_max_lines: int = 50
+    core_max_tests: int = 30
+    test_globs: list[str] = field(default_factory=lambda: list(DEFAULT_TEST_GLOBS))
 
     @classmethod
     def from_inputs(cls, docs: str = "", docs_exclude: str = "", full: str = "",
-                    small_max_files: str = "", small_max_lines: str = "") -> "Config":
+                    small_max_files: str = "", small_max_lines: str = "",
+                    core_max_tests: str = "", test_globs: str = "") -> "Config":
         declared = parse_list(docs)
         return cls(
             docs=[] if declared == ["none"] else (declared or list(DEFAULT_DOCS)),
@@ -86,6 +92,8 @@ class Config:
             full=DEFAULT_FULL + parse_list(full),
             small_max_files=int(small_max_files or 3),
             small_max_lines=int(small_max_lines or 50),
+            core_max_tests=int(core_max_tests or 30),
+            test_globs=parse_list(test_globs) or list(DEFAULT_TEST_GLOBS),
         )
 
 
@@ -202,6 +210,49 @@ def docs_read_by_code(docs: list[str], root: str, tracked: list[str]) -> dict[st
     return found
 
 
+def reference_keys(path: str) -> list[str]:
+    """How a test imports `path`: `folder/name` (or `parent/folder` for an index)."""
+    parts = path.split("/")
+    stem = parts[-1].split(".")[0]
+    dirs = parts[:-1]
+    key_parts = dirs[-2:] if stem in FOLDER_MODULES else dirs[-1:] + [stem]
+    if not key_parts:
+        return []
+    slash = "/".join(key_parts)
+    return [slash, ".".join(key_parts)] if len(key_parts) > 1 else [slash]
+
+
+def direct_tests(changed: list[str], tracked: list[str], test_globs: list[str], root: str) -> list[str]:
+    """The tests that name a changed file by folder and name, plus changed tests.
+
+    Following every import (vitest related, jest --findRelatedTests) selects most
+    of a suite when a small change touches a widely imported module: in
+    dungeon-master a one-line change to convex/lib/costEnvelope.ts ran past six
+    minutes on one runner (2026-10-03). Typecheck covers every other caller, and
+    the full suite runs on the next standard change.
+    """
+    globs = [glob_to_regex(g) for g in test_globs]
+    tests = [t for t in tracked if any(g.match(t) for g in globs)]
+    test_set = set(tests)
+    chosen = {c for c in changed if c in test_set}
+    patterns = [(k, re.compile(r"(?<![\w-])" + re.escape(k) + r"(?![\w-])"))
+                for c in changed if c not in chosen for k in reference_keys(c)]
+    for t in tests:
+        if t in chosen or not patterns:
+            continue
+        try:
+            path = os.path.join(root, t)
+            if os.path.getsize(path) > MAX_SCAN_BYTES:
+                continue
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        if any(k in text and rx.search(text) for k, rx in patterns):
+            chosen.add(t)
+    return sorted(chosen)
+
+
 class Api:
     def __init__(self, base: str, repo: str, token: str):
         self.base, self.repo, self.token = base.rstrip("/"), repo, token
@@ -279,6 +330,7 @@ class Decision:
     tested_tree: str | None = None  # recorded on PR runs for the later push to main
     files: list[ChangedFile] = field(default_factory=list)
     labels: list[str] = field(default_factory=list)
+    direct_tests: list[str] = field(default_factory=list)  # core tier only
 
 
 def decide(event_name: str, event: dict, cfg: Config, api: Api, github_sha: str,
@@ -316,39 +368,50 @@ def _plan(environ: dict[str, str], cfg: Config, make_api: Callable[[str, str, st
 
 
 def _scan(state: dict, cfg: Config, root: str) -> Decision:
-    """Second phase, run in a checkout: docs that code refers to count as code."""
+    """Second phase, run in a checkout: docs that code refers to count as code, and
+    a core change gets its tests named — or the full suite if too many name it."""
     files = [ChangedFile(**f) for f in state["files"]]
-    tracked = subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True, check=True,
-                             timeout=60).stdout.decode("utf-8", "replace").split("\0")
-    read = docs_read_by_code(doc_candidates(files, cfg), root, [t for t in tracked if t])
+    tracked = [t for t in subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True, check=True,
+                                         timeout=60).stdout.decode("utf-8", "replace").split("\0") if t]
+    read = docs_read_by_code(doc_candidates(files, cfg), root, tracked)
     tier, reason = classify(files, cfg, state["labels"], read)
     if read:
         reason += "; docs read by code: " + ", ".join(f"{d} ({by})" for d, by in sorted(read.items()))
-    return Decision(tier, reason, state["tested_tree"], files, state["labels"])
+    tests: list[str] = []
+    if tier == CORE:
+        tests = direct_tests([f.path for f in files if f.status != "removed"], tracked, cfg.test_globs, root)
+        if len(tests) > cfg.core_max_tests:
+            tier, reason = STANDARD, (f"{reason}, but {len(tests)} test files name the changed code "
+                                      f"(quick limit {cfg.core_max_tests}); running the full suite")
+            tests = []
+        else:
+            reason += f"; {len(tests)} test file(s) name the changed code"
+    return Decision(tier, reason, state["tested_tree"], files, state["labels"], tests)
 
 
 def main(argv: list[str], environ: dict[str, str] = os.environ,
          make_api: Callable[[str, str, str], Api] = Api) -> int:
-    """Phase `plan` decides from the API alone; when the answer hangs on whether code
-    reads a changed doc it saves its state and asks the action for a checkout, and
-    phase `scan` finishes there."""
+    """Phase `plan` decides from the API alone. A small change, or one that hangs on
+    whether code reads a changed doc, saves its state and asks the action for a
+    checkout; phase `scan` finishes there."""
     phase = environ.get("INPUT_PHASE") or "plan"
     state_path = os.path.join(environ.get("RUNNER_TEMP") or tempfile.gettempdir(), "ci-tier-state.json")
     out = environ.get("GITHUB_OUTPUT")
     try:
         cfg = Config.from_inputs(environ.get("INPUT_DOCS_PATHS", ""), environ.get("INPUT_DOCS_EXCLUDE", ""),
                                  environ.get("INPUT_FULL_PATHS", ""), environ.get("INPUT_SMALL_MAX_FILES", ""),
-                                 environ.get("INPUT_SMALL_MAX_LINES", ""))
+                                 environ.get("INPUT_SMALL_MAX_LINES", ""), environ.get("INPUT_CORE_MAX_TESTS", ""),
+                                 environ.get("INPUT_TEST_GLOBS", ""))
         if phase == "scan":
             with open(state_path, encoding="utf-8") as fh:
                 d = _scan(json.load(fh), cfg, environ.get("GITHUB_WORKSPACE") or os.getcwd())
         else:
             d = _plan(environ, cfg, make_api)
-            if d.tier in (NONE, CORE) and doc_candidates(d.files, cfg):
+            if d.tier == CORE or (d.tier == NONE and doc_candidates(d.files, cfg)):
                 with open(state_path, "w", encoding="utf-8") as fh:
                     json.dump({"files": [asdict(f) for f in d.files], "labels": d.labels,
                                "tested_tree": d.tested_tree}, fh)
-                print(f"Provisional tier {d.tier}; checking whether code reads the changed docs.")
+                print(f"Provisional tier {d.tier}; checking the code for doc readers and tests.")
                 if out:
                     with open(out, "a", encoding="utf-8") as fh:
                         fh.write("needs-scan=true\n")
@@ -365,7 +428,8 @@ def main(argv: list[str], environ: dict[str, str] = os.environ,
     changed = sorted({f.path for f in d.files if f.status != "removed"})
     if out:
         with open(out, "a", encoding="utf-8") as fh:
-            fh.write(f"needs-scan=false\ntier={tier}\nreason={reason}\nchanged-files={json.dumps(changed)}\n")
+            fh.write(f"needs-scan=false\ntier={tier}\nreason={reason}\nchanged-files={json.dumps(changed)}\n"
+                     f"direct-tests={json.dumps(d.direct_tests)}\n")
     summary = environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as fh:

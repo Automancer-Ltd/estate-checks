@@ -21,6 +21,14 @@ inputs:
     description: 'A change of at most this many changed non-doc lines (and small-max-files) runs the core tier.'
     required: false
     default: '50'
+  core-max-tests:
+    description: 'A small change whose code is named by more than this many test files runs the full suite instead of the quick job.'
+    required: false
+    default: '30'
+  test-globs:
+    description: 'Optional. Globs that identify test files, replacing the default (*.test.*, *.spec.*, *_test.*, test_*.py, __tests__/).'
+    required: false
+    default: ''
   job-name:
     description: "The display name of the job calling this action. On a push to the default branch it is how the action finds what the merged PR's run tested."
     required: false
@@ -39,6 +47,9 @@ outputs:
   changed-files:
     description: 'JSON array of changed paths that still exist (empty when the tier needs no file list, e.g. an already-tested push)'
     value: ${{ steps.scan.outputs.changed-files || steps.plan.outputs.changed-files || '[]' }}
+  direct-tests:
+    description: 'Core tier only: JSON array of the test files that name the changed code (folder/name), plus changed test files. Run these in the quick job.'
+    value: ${{ steps.scan.outputs.direct-tests || steps.plan.outputs.direct-tests || '[]' }}
 
 runs:
   using: 'composite'
@@ -53,13 +64,15 @@ runs:
         INPUT_FULL_PATHS: ${{ inputs.full-paths }}
         INPUT_SMALL_MAX_FILES: ${{ inputs.small-max-files }}
         INPUT_SMALL_MAX_LINES: ${{ inputs.small-max-lines }}
+        INPUT_CORE_MAX_TESTS: ${{ inputs.core-max-tests }}
+        INPUT_TEST_GLOBS: ${{ inputs.test-globs }}
         INPUT_JOB_NAME: ${{ inputs.job-name }}
         INPUT_TOKEN: ${{ inputs.token }}
       run: python3 "$GITHUB_ACTION_PATH/classify.py"
 
-    # Only when the change is docs (or docs plus a small fix): is any changed doc
-    # read by code? A failed checkout makes the scan fail, which means standard.
-    - name: Check out the code to see who reads the changed docs
+    # A small change, or docs: does code read the changed docs, and which tests
+    # name the changed code? A failed checkout makes the scan fail: standard.
+    - name: Check out the code to finish classifying
       if: steps.plan.outputs.needs-scan == 'true'
       continue-on-error: true
       uses: actions/checkout@v7
@@ -77,4 +90,6 @@ runs:
         INPUT_FULL_PATHS: ${{ inputs.full-paths }}
         INPUT_SMALL_MAX_FILES: ${{ inputs.small-max-files }}
         INPUT_SMALL_MAX_LINES: ${{ inputs.small-max-lines }}
+        INPUT_CORE_MAX_TESTS: ${{ inputs.core-max-tests }}
+        INPUT_TEST_GLOBS: ${{ inputs.test-globs }}
       run: python3 "$GITHUB_ACTION_PATH/classify.py"
