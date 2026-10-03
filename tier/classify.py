@@ -225,12 +225,15 @@ def code_lines(text: str) -> str:
 
 def reference_keys(path: str) -> list[str]:
     """How a test imports `path`: `folder/name` (or `parent/folder` for an index);
-    a root file by its full name (`deploy.json`), never a bare word like `deploy`."""
+    a root file or a dotfile by its full name (`deploy.json`, `ci/.eslintrc.json`),
+    never a bare or empty word that would match every test."""
     parts = path.split("/")
     stem = parts[-1].split(".")[0]
     dirs = parts[:-1]
     if not dirs:
         return [parts[-1]]
+    if not stem:
+        return [f"{dirs[-1]}/{parts[-1]}"]
     key_parts = dirs[-2:] if stem in FOLDER_MODULES else dirs[-1:] + [stem]
     slash = "/".join(key_parts)
     return [slash, ".".join(key_parts)] if len(key_parts) > 1 else [slash]
@@ -270,7 +273,8 @@ def direct_tests(changed: list[str], tracked: list[str], test_globs: list[str], 
                 for c in sources for k in reference_keys(c)]
     targets = {os.path.splitext(c)[0] for c in sources} | set(sources)
     targets |= {os.path.dirname(c) for c in sources if os.path.basename(c).split(".")[0] in FOLDER_MODULES}
-    beside = {(os.path.dirname(c), os.path.basename(c).split(".")[0] + ".") for c in sources}
+    beside = {(os.path.dirname(c), os.path.basename(c).split(".")[0] + ".") for c in sources
+              if os.path.basename(c).split(".")[0]}
     for t in tests:
         if t in chosen or not sources:
             continue
