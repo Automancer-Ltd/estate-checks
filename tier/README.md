@@ -9,7 +9,7 @@ rules, not a model: the same change always gets the same answer.
 | Tier | When | The repo runs |
 |---|---|---|
 | `none` | every changed file is documentation that no code reads, **or** a push to the default branch whose tree is exactly what the merged PR's run passed | nothing but the gate |
-| `core` | at most `small-max-files` non-doc files and `small-max-lines` changed lines, and nothing that always needs the full suite | its quick job: lint, typecheck, tests related to the change (target under 2 minutes) |
+| `core` | at most `small-max-files` non-doc files and `small-max-lines` changed lines, nothing that always needs the full suite, and at most `core-max-tests` test files naming the changed code | its quick job: lint, typecheck, and the tests in `direct-tests` (target under 2–3 minutes) |
 | `standard` | everything else, any other event, and any classification failure | its normal CI |
 
 The label `ci:full` on a pull request forces `standard`.
@@ -30,6 +30,17 @@ Most repositories pass no inputs. The built-in lists live in `classify.py`:
   for each changed doc's path, its distinctive file name, or its folder in
   quotes (`"docs/reports"`). Any hit makes that doc count as code. A test that
   starts reading a doc next month is picked up without anyone editing a list.
+
+**The quick job's tests are named, not traced.** For a core change the action
+lists the test files that refer to a changed file by folder and name
+(`lib/costEnvelope`, `lib.costEnvelope`, or `engine/effects` for an index
+module), plus any changed test files, as the `direct-tests` output. Following
+every import (`vitest related`) selects most of a suite when a small change
+touches a widely imported module: in dungeon-master a one-line change to
+`convex/lib/costEnvelope.ts` ran past six minutes on one runner. Typecheck
+covers every other caller, and the full suite runs on the next standard
+change. If more than `core-max-tests` (default 30) test files name the change,
+it is not a low-risk change and the tier is `standard`.
 
 Inputs exist for the exceptions:
 - `docs-paths: none` for a repo where markdown is the product (a site,
@@ -70,6 +81,7 @@ jobs:
     outputs:
       tier: ${{ steps.tier.outputs.tier }}
       changed-files: ${{ steps.tier.outputs.changed-files }}
+      direct-tests: ${{ steps.tier.outputs.direct-tests }}
     steps:
       - id: tier
         uses: Automancer-Ltd/estate-checks/tier@v1
@@ -77,7 +89,8 @@ jobs:
   quick:                      # the core tier's job
     needs: tier
     if: needs.tier.outputs.tier == 'core'
-    # lint, typecheck, tests related to fromJSON(needs.tier.outputs.changed-files)
+    # lint, typecheck, then the tests in fromJSON(needs.tier.outputs.direct-tests)
+    # (may be empty: then lint and typecheck are the check)
 
   test:                       # the existing suite
     needs: tier

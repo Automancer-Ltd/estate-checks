@@ -149,6 +149,31 @@ class PullRequest(unittest.TestCase):
         self.assertEqual(result["tier"], CORE)
         self.assertEqual(json.loads(result["changed-files"]), ["README.md", "app/a.ts"])
 
+    def test_core_tier_names_the_tests_that_name_the_changed_code(self):
+        event, routes = pr([changed("convex/lib/costEnvelope.ts", 2), changed("convex/engine/effects/index.ts", 1),
+                            changed("tests/unit/own.test.ts", 1)])
+        repo = {
+            "convex/lib/costEnvelope.ts": "", "convex/engine/effects/index.ts": "", "tests/unit/own.test.ts": "",
+            "tests/unit/cost.test.ts": 'import { price } from "../../convex/lib/costEnvelope";\n',
+            "tests/unit/effects.test.ts": 'import { run } from "../../convex/engine/effects";\n',
+            "tests/unit/py_test.py": "from convex.lib.costEnvelope import price\n",
+            "tests/unit/other.test.ts": 'import { x } from "../../convex/lib/costEnvelopeHistory";\n',
+            "tests/unit/unrelated.test.ts": 'import { y } from "../../convex/lib/audit";\n',
+        }
+        result = run_main("pull_request", event, routes, repo)
+        self.assertEqual(result["tier"], CORE)
+        self.assertEqual(json.loads(result["direct-tests"]),
+                         ["tests/unit/cost.test.ts", "tests/unit/effects.test.ts", "tests/unit/own.test.ts",
+                          "tests/unit/py_test.py"])
+
+    def test_small_change_that_many_tests_name_runs_the_full_suite(self):
+        event, routes = pr([changed("convex/engine/transition.ts", 1)])
+        repo = {"convex/engine/transition.ts": "",
+                **{f"tests/t{i}.test.ts": 'import "../convex/engine/transition";\n' for i in range(3)}}
+        result = run_main("pull_request", event, routes, repo, {"INPUT_CORE_MAX_TESTS": "2"})
+        self.assertEqual(result["tier"], STANDARD)
+        self.assertEqual(json.loads(result["direct-tests"]), [])
+
 
 PUSH = {"ref": "refs/heads/main", "before": BEFORE, "after": AFTER, "repository": {"default_branch": "main"}}
 
