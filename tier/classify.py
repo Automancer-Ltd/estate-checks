@@ -11,9 +11,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
+import tempfile
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Callable, Iterable
 
 NONE, CORE, STANDARD = "none", "core", "standard"
@@ -29,13 +31,62 @@ class ChangedFile:
     status: str = "modified"
 
 
+# Estate defaults, so a repository normally declares nothing (Waseem chose
+# zero-config rules, 2026-10-03). Repo inputs add to these lists; `docs-paths`
+# replaces DEFAULT_DOCS, and `docs-paths: none` means nothing is docs.
+DEFAULT_DOCS = ["**/*.md", "**/*.rst"]
+# Markdown in these places is usually product, content or test data, not docs.
+DEFAULT_DOCS_EXCLUDE = [
+    "src/**", "**/src/**", "**/content/**", "**/_posts/**", "**/pages/**",
+    "**/skills/**", "**/prompts/**", "**/templates/**", ".agents/**", ".claude/**",
+    "**/public/**", "**/static/**", "**/fixtures/**", "**/__fixtures__/**",
+    "**/testdata/**", "**/test/**", "**/tests/**", "**/__tests__/**",
+]
+# Inputs whose effect related-test selection cannot see.
+DEFAULT_FULL = [
+    ".github/**",
+    "**/package.json", "**/package-lock.json", "**/npm-shrinkwrap.json", "**/pnpm-lock.yaml",
+    "**/pnpm-workspace.yaml", "**/yarn.lock", "**/bun.lock", "**/bun.lockb", "**/.npmrc",
+    "**/requirements*.txt", "**/pyproject.toml", "**/uv.lock", "**/poetry.lock", "**/Pipfile*",
+    "**/Cargo.toml", "**/Cargo.lock", "**/go.mod", "**/go.sum", "**/Gemfile*",
+    "**/.nvmrc", "**/.node-version", "**/.python-version", "**/.tool-versions",
+    "**/Dockerfile*", "**/docker-compose*.yml", "**/docker-compose*.yaml", "**/compose*.yaml",
+    "**/tsconfig*.json", "**/jsconfig*.json", "**/*.config.js", "**/*.config.ts",
+    "**/*.config.mjs", "**/*.config.cjs", "**/*.config.mts", "**/.eslintrc*", "**/.oxlintrc*",
+    "**/biome.json", "**/biome.jsonc", "**/.prettierrc*", "**/Makefile", "**/justfile",
+    "**/migrations/**", "**/*.sql", "**/schema.prisma", "**/schema.ts", "**/schema.js",
+    "**/convex.json", "**/vercel.json", "**/wrangler.toml", "**/wrangler.json*",
+    "**/netlify.toml", "**/render.yaml", "**/fly.toml",
+]
+# Names too common to mean "this file" when they appear in code.
+GENERIC_DOC_NAMES = {
+    "readme.md", "changelog.md", "license.md", "contributing.md", "security.md",
+    "code_of_conduct.md", "index.md", "agents.md", "claude.md", "spec.md", "notes.md",
+    "todo.md", "plan.md", "summary.md", "report.md", "design.md",
+}
+DOC_SUFFIXES = (".md", ".rst")
+MAX_SCAN_BYTES = 2_000_000
+
+
 @dataclass
 class Config:
-    docs: list[str] = field(default_factory=list)
-    docs_exclude: list[str] = field(default_factory=list)
-    full: list[str] = field(default_factory=list)
+    docs: list[str] = field(default_factory=lambda: list(DEFAULT_DOCS))
+    docs_exclude: list[str] = field(default_factory=lambda: list(DEFAULT_DOCS_EXCLUDE))
+    full: list[str] = field(default_factory=lambda: list(DEFAULT_FULL))
     small_max_files: int = 3
     small_max_lines: int = 50
+
+    @classmethod
+    def from_inputs(cls, docs: str = "", docs_exclude: str = "", full: str = "",
+                    small_max_files: str = "", small_max_lines: str = "") -> "Config":
+        declared = parse_list(docs)
+        return cls(
+            docs=[] if declared == ["none"] else (declared or list(DEFAULT_DOCS)),
+            docs_exclude=DEFAULT_DOCS_EXCLUDE + parse_list(docs_exclude),
+            full=DEFAULT_FULL + parse_list(full),
+            small_max_files=int(small_max_files or 3),
+            small_max_lines=int(small_max_lines or 50),
+        )
 
 
 def glob_to_regex(pattern: str) -> re.Pattern[str]:
@@ -72,35 +123,83 @@ def _matches(path: str, patterns: Iterable[re.Pattern[str]]) -> bool:
     return any(p.match(path) for p in patterns)
 
 
-def classify(files: list[ChangedFile], cfg: Config, labels: Iterable[str] = ()) -> tuple[str, str]:
-    """Return (tier, reason) for a set of changed files."""
+def _paths(f: ChangedFile) -> list[str]:
+    return [f.path] + ([f.previous_path] if f.previous_path else [])
+
+
+def doc_candidates(files: list[ChangedFile], cfg: Config) -> list[str]:
+    """Changed paths the globs call documentation, before checking who reads them."""
+    docs = [glob_to_regex(p) for p in cfg.docs]
+    excluded = [glob_to_regex(p) for p in cfg.docs_exclude]
+    return sorted({p for f in files for p in _paths(f) if _matches(p, docs) and not _matches(p, excluded)})
+
+
+def classify(files: list[ChangedFile], cfg: Config, labels: Iterable[str] = (),
+             read_docs: Iterable[str] = ()) -> tuple[str, str]:
+    """Return (tier, reason). A doc in `read_docs` is read by code, so it counts as code."""
     labels = set(labels)
     if "ci:full" in labels:
         return STANDARD, "label ci:full"
     if not files:
         return STANDARD, "no changed files reported"
-    docs = [glob_to_regex(p) for p in cfg.docs]
-    excluded = [glob_to_regex(p) for p in cfg.docs_exclude]
     full = [glob_to_regex(p) for p in cfg.full]
-
-    def paths(f: ChangedFile) -> list[str]:
-        return [f.path] + ([f.previous_path] if f.previous_path else [])
-
     for f in files:
-        hit = next((p for p in paths(f) if _matches(p, full)), None)
+        hit = next((p for p in _paths(f) if _matches(p, full)), None)
         if hit:
             return STANDARD, f"{hit} always needs the full suite"
 
-    def is_doc(f: ChangedFile) -> bool:
-        return all(_matches(p, docs) and not _matches(p, excluded) for p in paths(f))
-
-    code = [f for f in files if not is_doc(f)]
+    docs = set(doc_candidates(files, cfg)) - set(read_docs)
+    code = [f for f in files if not all(p in docs for p in _paths(f))]
     if not code:
-        return NONE, f"all {len(files)} changed file(s) are documentation"
+        return NONE, f"all {len(files)} changed file(s) are documentation no code reads"
     lines = sum(f.lines for f in code)
     if len(code) <= cfg.small_max_files and lines <= cfg.small_max_lines:
         return CORE, f"small change: {len(code)} file(s), {lines} line(s)"
     return STANDARD, f"{len(code)} file(s), {lines} line(s) changed"
+
+
+def reader_patterns(doc: str) -> list[tuple[str, re.Pattern[str]]]:
+    """How code refers to a doc: its path, a distinctive file name, or its folder in quotes.
+
+    Each pattern comes with the literal it must contain, so a plain substring
+    test rules most files out before any regex runs. The folder must be at least
+    two levels deep and directly followed by a quote (`"docs/reports"` or
+    `'docs/reports/'`), which is how code lists a directory; a comment citing
+    `docs/plans/x.md` does not make every plan code.
+    """
+    pats = [(doc, re.compile(re.escape(doc)))]
+    name = doc.rsplit("/", 1)[-1]
+    if "/" in doc and name.lower() not in GENERIC_DOC_NAMES:
+        pats.append((name, re.compile(r"(?<![\w.-])" + re.escape(name))))
+    parts = doc.split("/")[:-1]
+    for depth in range(2, len(parts) + 1):
+        folder = "/".join(parts[:depth])
+        pats.append((folder, re.compile(re.escape(folder) + r"/?[\"'`]")))
+    return pats
+
+
+def docs_read_by_code(docs: list[str], root: str, tracked: list[str]) -> dict[str, str]:
+    """Map each doc that a non-doc tracked file refers to onto one such file."""
+    wanted = {d: reader_patterns(d) for d in docs}
+    found: dict[str, str] = {}
+    for rel in tracked:
+        if rel.endswith(DOC_SUFFIXES) or len(found) == len(wanted):
+            continue
+        full = os.path.join(root, rel)
+        try:
+            if os.path.getsize(full) > MAX_SCAN_BYTES:
+                continue
+            with open(full, "rb") as fh:
+                raw = fh.read()
+        except OSError:
+            continue
+        if b"\0" in raw:
+            continue
+        text = raw.decode("utf-8", "replace")
+        for doc, pats in wanted.items():
+            if doc not in found and any(lit in text and rx.search(text) for lit, rx in pats):
+                found[doc] = rel
+    return found
 
 
 class Api:
@@ -176,6 +275,7 @@ class Decision:
     reason: str
     tested_tree: str | None = None  # recorded on PR runs for the later push to main
     files: list[ChangedFile] = field(default_factory=list)
+    labels: list[str] = field(default_factory=list)
 
 
 def decide(event_name: str, event: dict, cfg: Config, api: Api, github_sha: str,
@@ -184,7 +284,7 @@ def decide(event_name: str, event: dict, cfg: Config, api: Api, github_sha: str,
         pr = event["pull_request"]
         labels = [label["name"] for label in pr.get("labels", [])]
         files = _files(api.paged(f"pulls/{pr['number']}/files"))
-        return Decision(*classify(files, cfg, labels), tree_of(api, github_sha), files)
+        return Decision(*classify(files, cfg, labels), tree_of(api, github_sha), files, labels)
     if event_name == "push" and event.get("ref") == default_branch_ref:
         before, after = event.get("before", ""), event.get("after", "")
         if not before or set(before) == {"0"} or event.get("forced"):
@@ -201,24 +301,55 @@ def decide(event_name: str, event: dict, cfg: Config, api: Api, github_sha: str,
     return Decision(STANDARD, f"event {event_name} always runs the full suite")
 
 
+def _plan(environ: dict[str, str], cfg: Config, make_api: Callable[[str, str, str], Api]) -> Decision:
+    with open(environ["GITHUB_EVENT_PATH"], encoding="utf-8") as fh:
+        event = json.load(fh)
+    api = make_api(environ.get("GITHUB_API_URL", "https://api.github.com"),
+                   environ["GITHUB_REPOSITORY"], environ["INPUT_TOKEN"])
+    default_ref = "refs/heads/" + (event.get("repository", {}).get("default_branch") or "main")
+    return decide(environ.get("GITHUB_EVENT_NAME", ""), event, cfg, api,
+                  environ.get("GITHUB_SHA", ""), environ.get("GITHUB_WORKFLOW_REF", "").split("@")[0],
+                  environ.get("INPUT_JOB_NAME") or "ci tier", default_ref)
+
+
+def _scan(state: dict, cfg: Config, root: str) -> Decision:
+    """Second phase, run in a checkout: docs that code refers to count as code."""
+    files = [ChangedFile(**f) for f in state["files"]]
+    tracked = subprocess.run(["git", "ls-files", "-z"], cwd=root, capture_output=True, check=True,
+                             timeout=60).stdout.decode("utf-8", "replace").split("\0")
+    read = docs_read_by_code(doc_candidates(files, cfg), root, [t for t in tracked if t])
+    tier, reason = classify(files, cfg, state["labels"], read)
+    if read:
+        reason += "; docs read by code: " + ", ".join(f"{d} ({by})" for d, by in sorted(read.items()))
+    return Decision(tier, reason, state["tested_tree"], files, state["labels"])
+
+
 def main(argv: list[str], environ: dict[str, str] = os.environ,
          make_api: Callable[[str, str, str], Api] = Api) -> int:
-    cfg = Config(
-        docs=parse_list(environ.get("INPUT_DOCS_PATHS", "")),
-        docs_exclude=parse_list(environ.get("INPUT_DOCS_EXCLUDE", "")),
-        full=parse_list(environ.get("INPUT_FULL_PATHS", "")),
-        small_max_files=int(environ.get("INPUT_SMALL_MAX_FILES") or 3),
-        small_max_lines=int(environ.get("INPUT_SMALL_MAX_LINES") or 50),
-    )
+    """Phase `plan` decides from the API alone; when the answer hangs on whether code
+    reads a changed doc it saves its state and asks the action for a checkout, and
+    phase `scan` finishes there."""
+    phase = environ.get("INPUT_PHASE") or "plan"
+    state_path = os.path.join(environ.get("RUNNER_TEMP") or tempfile.gettempdir(), "ci-tier-state.json")
+    out = environ.get("GITHUB_OUTPUT")
     try:
-        with open(environ["GITHUB_EVENT_PATH"], encoding="utf-8") as fh:
-            event = json.load(fh)
-        api = make_api(environ.get("GITHUB_API_URL", "https://api.github.com"),
-                       environ["GITHUB_REPOSITORY"], environ["INPUT_TOKEN"])
-        default_ref = "refs/heads/" + (event.get("repository", {}).get("default_branch") or "main")
-        d = decide(environ.get("GITHUB_EVENT_NAME", ""), event, cfg, api,
-                   environ.get("GITHUB_SHA", ""), environ.get("GITHUB_WORKFLOW_REF", "").split("@")[0],
-                   environ.get("INPUT_JOB_NAME") or "ci tier", default_ref)
+        cfg = Config.from_inputs(environ.get("INPUT_DOCS_PATHS", ""), environ.get("INPUT_DOCS_EXCLUDE", ""),
+                                 environ.get("INPUT_FULL_PATHS", ""), environ.get("INPUT_SMALL_MAX_FILES", ""),
+                                 environ.get("INPUT_SMALL_MAX_LINES", ""))
+        if phase == "scan":
+            with open(state_path, encoding="utf-8") as fh:
+                d = _scan(json.load(fh), cfg, environ.get("GITHUB_WORKSPACE") or os.getcwd())
+        else:
+            d = _plan(environ, cfg, make_api)
+            if d.tier in (NONE, CORE) and doc_candidates(d.files, cfg):
+                with open(state_path, "w", encoding="utf-8") as fh:
+                    json.dump({"files": [asdict(f) for f in d.files], "labels": d.labels,
+                               "tested_tree": d.tested_tree}, fh)
+                print(f"Provisional tier {d.tier}; checking whether code reads the changed docs.")
+                if out:
+                    with open(out, "a", encoding="utf-8") as fh:
+                        fh.write("needs-scan=true\n")
+                return 0
     except Exception as exc:  # noqa: BLE001 — any surprise must fail toward running the suite
         d = Decision(STANDARD, f"could not classify ({type(exc).__name__}: {exc}); running the full suite")
         print(f"::warning title={NOTICE_TITLE}::{d.reason}")
@@ -229,10 +360,9 @@ def main(argv: list[str], environ: dict[str, str] = os.environ,
         print(f"::notice title={NOTICE_TITLE}::tier={tier} tested-tree={d.tested_tree}")
     # Existing paths only: a deleted file has nothing to lint or test.
     changed = sorted({f.path for f in d.files if f.status != "removed"})
-    out = environ.get("GITHUB_OUTPUT")
     if out:
         with open(out, "a", encoding="utf-8") as fh:
-            fh.write(f"tier={tier}\nreason={reason}\nchanged-files={json.dumps(changed)}\n")
+            fh.write(f"needs-scan=false\ntier={tier}\nreason={reason}\nchanged-files={json.dumps(changed)}\n")
     summary = environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as fh:

@@ -2,15 +2,15 @@ name: 'Estate CI tier'
 description: 'Choose how much CI a change needs (none, core, standard) so CI effort matches what was touched'
 inputs:
   docs-paths:
-    description: 'Comma- or newline-separated globs for documentation that ships nothing and that no test or script reads. Empty means nothing counts as docs.'
+    description: 'Optional. Globs that count as documentation, replacing the built-in default (all .md and .rst outside product/content/test folders). "none" means nothing is documentation, for repos where markdown is the product.'
     required: false
     default: ''
   docs-exclude:
-    description: 'Globs inside docs-paths that a test or script DOES read; changing them needs CI.'
+    description: 'Optional. Extra globs that are never documentation, added to the built-in list.'
     required: false
     default: ''
   full-paths:
-    description: 'Globs that always need the full suite (lockfiles, CI files, migrations, auth, deploy scripts).'
+    description: 'Optional. Extra globs that always need the full suite, added to the built-in list (lockfiles, CI, toolchain config, schema, migrations, deploy config).'
     required: false
     default: ''
   small-max-files:
@@ -32,21 +32,22 @@ inputs:
 outputs:
   tier:
     description: 'none | core | standard'
-    value: ${{ steps.classify.outputs.tier }}
+    value: ${{ steps.scan.outputs.tier || steps.plan.outputs.tier || 'standard' }}
   reason:
     description: 'Why that tier was chosen'
-    value: ${{ steps.classify.outputs.reason }}
+    value: ${{ steps.scan.outputs.reason || steps.plan.outputs.reason }}
   changed-files:
     description: 'JSON array of changed paths that still exist (empty when the tier needs no file list, e.g. an already-tested push)'
-    value: ${{ steps.classify.outputs.changed-files }}
+    value: ${{ steps.scan.outputs.changed-files || steps.plan.outputs.changed-files || '[]' }}
 
 runs:
   using: 'composite'
   steps:
     - name: Classify the change
-      id: classify
+      id: plan
       shell: bash
       env:
+        INPUT_PHASE: plan
         INPUT_DOCS_PATHS: ${{ inputs.docs-paths }}
         INPUT_DOCS_EXCLUDE: ${{ inputs.docs-exclude }}
         INPUT_FULL_PATHS: ${{ inputs.full-paths }}
@@ -54,4 +55,26 @@ runs:
         INPUT_SMALL_MAX_LINES: ${{ inputs.small-max-lines }}
         INPUT_JOB_NAME: ${{ inputs.job-name }}
         INPUT_TOKEN: ${{ inputs.token }}
+      run: python3 "$GITHUB_ACTION_PATH/classify.py"
+
+    # Only when the change is docs (or docs plus a small fix): is any changed doc
+    # read by code? A failed checkout makes the scan fail, which means standard.
+    - name: Check out the code to see who reads the changed docs
+      if: steps.plan.outputs.needs-scan == 'true'
+      continue-on-error: true
+      uses: actions/checkout@v7
+      with:
+        persist-credentials: false
+
+    - name: Finish classifying
+      id: scan
+      if: steps.plan.outputs.needs-scan == 'true'
+      shell: bash
+      env:
+        INPUT_PHASE: scan
+        INPUT_DOCS_PATHS: ${{ inputs.docs-paths }}
+        INPUT_DOCS_EXCLUDE: ${{ inputs.docs-exclude }}
+        INPUT_FULL_PATHS: ${{ inputs.full-paths }}
+        INPUT_SMALL_MAX_FILES: ${{ inputs.small-max-files }}
+        INPUT_SMALL_MAX_LINES: ${{ inputs.small-max-lines }}
       run: python3 "$GITHUB_ACTION_PATH/classify.py"

@@ -3,20 +3,46 @@
 `Automancer-Ltd/estate-checks/tier@v1` decides how much CI a change needs.
 Waseem's rule (2026-10-03): a docs-only change runs no CI, a small scoped fix
 runs a quick core set, everything else runs the repo's normal suite. Extended
-suites stay on the production-deploy path, never on pull requests.
+suites stay on the production-deploy path, never on pull requests. It is plain
+rules, not a model: the same change always gets the same answer.
 
 | Tier | When | The repo runs |
 |---|---|---|
-| `none` | every changed file is declared documentation, **or** a push to the default branch whose tree is exactly what the merged PR's run passed | nothing but the gate |
-| `core` | at most `small-max-files` non-doc files and `small-max-lines` changed lines, and nothing in `full-paths` | its quick job: lint, typecheck, tests related to the change (target under 2 minutes) |
+| `none` | every changed file is documentation that no code reads, **or** a push to the default branch whose tree is exactly what the merged PR's run passed | nothing but the gate |
+| `core` | at most `small-max-files` non-doc files and `small-max-lines` changed lines, and nothing that always needs the full suite | its quick job: lint, typecheck, tests related to the change (target under 2 minutes) |
 | `standard` | everything else, any other event, and any classification failure | its normal CI |
 
 The label `ci:full` on a pull request forces `standard`.
 
+## Zero configuration by default
+
+Most repositories pass no inputs. The built-in lists live in `classify.py`:
+
+- **Documentation:** every `.md` and `.rst` file, except under folders where
+  markdown is usually product, content or test data (`src/`, `content/`,
+  `pages/`, `_posts/`, `skills/`, `prompts/`, `templates/`, `public/`,
+  `static/`, `.agents/`, `.claude/`, fixtures and test folders).
+- **Always the full suite:** CI files, dependency manifests and lockfiles,
+  toolchain and runtime versions, TypeScript/lint/test/bundler config,
+  Dockerfiles, schema files, SQL and migrations, and hosting config.
+- **Who reads the docs is detected, not declared.** When the answer depends on
+  documentation, the action checks out the code and searches every non-doc file
+  for each changed doc's path, its distinctive file name, or its folder in
+  quotes (`"docs/reports"`). Any hit makes that doc count as code. A test that
+  starts reading a doc next month is picked up without anyone editing a list.
+
+Inputs exist for the exceptions:
+- `docs-paths: none` for a repo where markdown is the product (a site,
+  a skills repo).
+- `full-paths` for code only a non-unit CI job exercises (playtest or deploy
+  scripts, shared test harness), so a small change there still runs the full
+  suite.
+- `docs-paths` / `docs-exclude` to replace or narrow the documentation default.
+
 ## How each tier is decided
 
-- **Pull request:** the PR's file list from the REST API (no checkout). A rename
-  counts as both its old and new path, so moving code into `docs/` is not docs.
+- **Pull request:** the PR's file list from the REST API. A rename counts as
+  both its old and new path, so moving code into `docs/` is not docs.
 - **Push to the default branch:** the action finds the merged PR, reads the
   tree its passing run recorded (a `ci-tier` notice annotation on this job,
   `tested-tree=<sha>`), and compares it with the pushed commit's tree. Equal
@@ -24,25 +50,8 @@ The label `ci:full` on a pull request forces `standard`.
   Otherwise the before...after diff is classified like a PR, which keeps the
   merge-skew check (two PRs that pass alone but clash together).
 - **Anything else** (`workflow_dispatch`, `schedule`, a force push, a new
-  branch, an API error, more than 300 changed files on a push): `standard`.
-
-The action fails toward running tests. It never fails the job: an error is a
-warning and `standard`.
-
-## Declaring docs per repository
-
-Markdown is shipped content in some repos (skills, agent instructions, content
-pages, fixtures under `docs/`). There is no default: an empty `docs-paths`
-means nothing counts as docs. Declare only paths that ship nothing and that no
-test or script reads, and put any file a test does read in `docs-exclude`.
-Find readers with, for example:
-
-```sh
-git grep -nE "['\"\`/]docs/" -- tests scripts src
-```
-
-Patterns are anchored at the repo root: `*.md` is root markdown only,
-`docs/**/*.md` is markdown anywhere under `docs/`.
+  branch, an API error, a failed checkout, more than 300 changed files on a
+  push): `standard`. The action never fails the job.
 
 ## Wiring a workflow
 
@@ -60,22 +69,15 @@ jobs:
     timeout-minutes: 3
     outputs:
       tier: ${{ steps.tier.outputs.tier }}
+      changed-files: ${{ steps.tier.outputs.changed-files }}
     steps:
       - id: tier
         uses: Automancer-Ltd/estate-checks/tier@v1
-        with:
-          docs-paths: |
-            docs/**/*.md
-            *.md
-          docs-exclude: docs/schema-classification.md
-          full-paths: |
-            pnpm-lock.yaml
-            .github/**
 
   quick:                      # the core tier's job
     needs: tier
     if: needs.tier.outputs.tier == 'core'
-    # lint, typecheck, related tests
+    # lint, typecheck, tests related to fromJSON(needs.tier.outputs.changed-files)
 
   test:                       # the existing suite
     needs: tier
