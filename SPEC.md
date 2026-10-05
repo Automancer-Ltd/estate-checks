@@ -1,5 +1,7 @@
 # Estate Checks — Living Specification
 
+Last verified: 2026-10-05 on automancer-vps
+
 > Internal living spec. Update the relevant module section in the SAME branch
 > as any behaviour change. Last verified against the code: 2026-09-28.
 
