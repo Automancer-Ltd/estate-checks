@@ -1,5 +1,7 @@
 # Automancer Estate Checks
 
+Last verified: 2026-10-05 on automancer-vps
+
 Shared mechanical CI checks for the Automancer estate, centralized in a single repository and invoked by version tag across all estate projects.
 
 The check inspects code for **unbounded outside network and subprocess calls**—the estate's most repeated failure pattern, where an unconstrained supplier call, hanging HTTP request, or blocked subprocess halts a background job, locks an event loop, freezes a user-facing page, or consumes entire CI runner quotas.
@@ -22,7 +24,7 @@ Rules are defined in [`rules/unbounded-calls.yml`](rules/unbounded-calls.yml) an
 - **`child-process-no-timeout`**: Synchronous or execution subprocess calls (`child_process.exec`, `execFile`, `spawnSync`) without `timeout` or `signal`.
   - *Fix*: Pass `timeout: <milliseconds>` (or `signal`) in the options object.
 - **`node-http-no-timeout`**: `http.request`, `https.request`, `http.get`, or `https.get` without `timeout` or `signal`.
-  - *Fix*: Pass `timeout: <milliseconds>` in options or register a `req.setTimeout(...)` handler.
+  - *Fix*: Pass `timeout: <milliseconds>` or `signal` in the request options. The rule does not recognize a later `req.setTimeout(...)` call as a suppression (verified 2026-10-05).
 
 ### Python
 - **`python-requests-no-timeout`**: `requests.*` HTTP methods without `timeout=` or with explicit `timeout=None`.

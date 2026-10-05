@@ -1,5 +1,7 @@
 # CI tier — run CI in proportion to the change
 
+Last verified: 2026-10-05 on automancer-vps
+
 `Automancer-Ltd/estate-checks/tier@v1` decides how much CI a change needs.
 Waseem's rule (2026-10-03): a docs-only change runs no CI, a small scoped fix
 runs a quick core set, everything else runs the repo's normal suite. Extended
