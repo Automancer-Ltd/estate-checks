@@ -52,6 +52,42 @@ Inputs exist for the exceptions:
   suite.
 - `docs-paths` / `docs-exclude` to replace or narrow the documentation default.
 
+## Sparse checkout for asset-heavy repositories
+
+The optional checkout inputs pass directly to `actions/checkout` when the
+classifier needs to scan files. Defaults preserve a full checkout.
+
+| Input | Default | Meaning |
+|---|---|---|
+| `sparse-checkout` | empty | Newline-separated directories (cone mode) or patterns (non-cone mode). Empty checks out the full repository. |
+| `sparse-checkout-cone-mode` | `'true'` | Use cone mode. Set `'false'` for gitignore-style patterns. |
+
+Retain every file the classifier reads: code, tests, docs and configuration.
+Exclude only binary asset trees that cannot contain source, tests or doc
+readers. Missing readers or tests can produce an incorrect tier or an incomplete
+`direct-tests` output. The classifier cannot detect that a consumer omitted them.
+
+For example, a repository whose classifier-readable files are all in the
+listed directories or at the root can use:
+
+```yaml
+- id: tier
+  uses: Automancer-Ltd/estate-checks/tier@v1
+  with:
+    sparse-checkout: |
+      .github
+      src
+      tests
+      docs
+      config
+```
+
+Cone mode also includes root files. Adapt the list to the repository; include
+all other source, test, documentation and configuration directories. To exclude
+an asset directory with patterns, set `sparse-checkout-cone-mode: 'false'`.
+These inputs affect only the tier action's conditional checkout. They do not
+configure checkout in other jobs or change history depth or tier selection.
+
 ## How each tier is decided
 
 - **Pull request:** the PR's file list from the REST API. A rename counts as
