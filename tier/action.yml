@@ -1,6 +1,14 @@
 name: 'Estate CI tier'
 description: 'Choose how much CI a change needs (none, core, standard) so CI effort matches what was touched'
 inputs:
+  sparse-checkout:
+    description: 'Optional. Newline-separated checkout patterns. Retain all code, tests, docs and configuration the classifier reads. Empty means a full checkout.'
+    required: false
+    default: ''
+  sparse-checkout-cone-mode:
+    description: 'Use cone mode for sparse checkout. Set false for gitignore-style patterns.'
+    required: false
+    default: 'true'
   docs-paths:
     description: 'Optional. Globs that count as documentation, replacing the built-in default (all .md and .rst outside product/content/test folders). "none" means nothing is documentation, for repos where markdown is the product.'
     required: false
@@ -78,6 +86,8 @@ runs:
       uses: actions/checkout@v7
       with:
         persist-credentials: false
+        sparse-checkout: ${{ inputs.sparse-checkout }}
+        sparse-checkout-cone-mode: ${{ inputs.sparse-checkout-cone-mode }}
 
     - name: Finish classifying
       id: scan

@@ -45,7 +45,7 @@ Give repositories a shared CI check for outside network and subprocess calls tha
 
 ### CI tier action (`tier/`)
 
-- What it does: Classifies a pull request or default-branch push as `none`, `core` or `standard` from the changed files, per-repo docs and full-suite globs, and size limits. On a default-branch push it skips when the pushed tree equals the tree the merged PR's passing run recorded. Any failure resolves to `standard`.
+- What it does: Classifies a pull request or default-branch push as `none`, `core` or `standard` from the changed files, per-repo docs and full-suite globs, and size limits. On a default-branch push it skips when the pushed tree equals the tree the merged PR's passing run recorded. Any failure resolves to `standard`. Optional `sparse-checkout` and `sparse-checkout-cone-mode` inputs control its conditional checkout. Defaults keep a full checkout with cone mode enabled. Consumers must retain all code, tests, docs and configuration the classifier reads.
 - State: built
 - Shaped by: Waseem's proportionate-CI decisions of 2026-10-03 (`auto/plans/ci-proportionate-2026-10-03.md`) and the cases in `tier/test_classify.py`.
 
