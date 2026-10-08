@@ -13,7 +13,7 @@ concurrency:
 jobs:
   test:
     name: rule tests
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-24.04"') }}
     timeout-minutes: 5
     steps:
       - name: Checkout code
@@ -32,7 +32,7 @@ jobs:
 
   action-lint:
     name: action and workflow lint
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-24.04"') }}
     timeout-minutes: 5
     steps:
       - name: Checkout code
@@ -60,7 +60,7 @@ jobs:
 
   self-test:
     name: self test composite action
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-24.04"') }}
     timeout-minutes: 5
     steps:
       - name: Checkout code
@@ -116,7 +116,7 @@ jobs:
     name: ci gate
     if: always()
     needs: [test, action-lint, self-test]
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-24.04"') }}
     timeout-minutes: 5
     steps:
       - name: Assert every gate job passed or was deliberately skipped
