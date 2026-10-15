@@ -1,13 +1,13 @@
 # Estate Checks — Living Specification
 
-Last verified: 2026-10-05 on automancer-vps
+Last verified: 2026-10-15 on automancer-vps
 
 > Internal living spec. Update the relevant module section in the SAME branch
 > as any behaviour change. Last verified against the code: 2026-09-28.
 
 ## North star
 
-Give repositories a shared CI check for outside network and subprocess calls that have no time limit.
+Give repositories a shared CI check for outside network and subprocess calls that have no time limit, and for the mechanical workflow rules of `ci-standards`, so both are reported by a guard rather than remembered from prose.
 
 ## Key principles
 
@@ -21,7 +21,7 @@ Give repositories a shared CI check for outside network and subprocess calls tha
 
 ### Composite action (`action.yml`)
 
-- What it does: Sets up Semgrep, selects a pull request baseline or a full scan, applies exclusions, and runs the rule set. It supports custom rules, strict mode, and a findings count output.
+- What it does: Sets up Semgrep, selects a pull request baseline or a full scan, applies exclusions, and runs the rule set. It supports custom rules, strict mode, and a findings count output. In the same job it runs the workflow standards check against the caller's own workflows and exposes its warning count. `check-workflows: 'false'` skips that second check.
 - State: built
 - Shaped by: Pull request differential scans, default warning behavior, and caller configuration in the action inputs.
 
@@ -37,9 +37,15 @@ Give repositories a shared CI check for outside network and subprocess calls tha
 - State: built
 - Shaped by: The action's warning and strict modes, differential scans, and the validation cases in `scripts/test-validation.py`.
 
+### Workflow standards check (`scripts/workflow-standards.py`, `scripts/test-workflow-standards.py`)
+
+- What it does: Reads the caller's `.github/workflows/*.yml` and annotates breaches of `ci-standards` rules 1-4 — a job with no `timeout-minutes` or above the 30-minute cap, a workflow with no concurrency group, a `push:` without a branch filter or filtered away from the default branch, and an organisation job whose `runs-on` is a hosted label literal instead of `vars.CI_RUNNER`. Warning only: it exits 0 with findings, and a workflow it cannot parse is reported as a warning rather than a clean result. Parses with `yaml.compose` so each annotation carries the line of the key at fault. The tests pin every rule against a fixture that must be flagged and one that must not.
+- State: built
+- Shaped by: The `ci-standards` rules, precision-over-recall (personal repositories, expressions, self-hosted labels, tag-only pushes and 10-30 minute timeouts are deliberately not judged), and Waseem's 2026-09-27 warn-only decision. Contradiction 7 of `/opt/automancer/auto/plans/repo-shaping-2026-10-15.md`.
+
 ### Repository CI (`.github/workflows/ci.yml`)
 
-- What it does: Tests Semgrep rules, validates the action and workflow, runs script self-tests, and checks warning and strict modes on pull requests.
+- What it does: Tests Semgrep rules, validates the action and workflow, runs script self-tests (including the workflow standards fixtures), and checks warning and strict modes on pull requests.
 - State: built
 - Shaped by: The rule fixtures, validation tests, and the composite action's public inputs.
 

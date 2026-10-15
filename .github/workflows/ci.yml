@@ -76,6 +76,11 @@ jobs:
           set -euo pipefail
           python3 -m unittest discover -s tier -v
 
+      - name: Run workflow standards check tests
+        run: |
+          set -euo pipefail
+          python3 scripts/test-workflow-standards.py
+
       - name: Warn mode — unresolvable baseline warns and does not fail
         id: test-warn
         if: github.event_name == 'pull_request'
