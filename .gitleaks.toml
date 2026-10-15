@@ -1,0 +1,20 @@
+title = "repo-local-policy"
+
+# Keep the standard detector rules active while layering the repository's
+# narrowly-scoped placeholder allowlist on top. Without [extend].useDefault,
+# gitleaks replaces its built-in ruleset with this file's (empty) rules and
+# every scan reports clean regardless of what the repository contains.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Allow benign placeholders"
+regexes = [
+  '''YOUR_(API|TOKEN|SECRET)_HERE''',
+  '''example(_|-)?(api|token|secret|key)''',
+  '''your-[a-z0-9-]+''',
+  '''<[a-z0-9_-]+>''',
+]
+paths = [
+  '''(^|/)\.git/''',
+]
