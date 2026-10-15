@@ -8,6 +8,8 @@ The check inspects code for **unbounded outside network and subprocess calls**�
 
 The repository also ships [`tier`](tier/README.md), a second action that decides how much CI a change needs (none, core or standard) so docs-only changes and already-tested merges skip the suite.
 
+The same action runs a second, pure-Python check: **workflow standards**, the mechanical rules 1-4 of the `ci-standards` skill, read from this repository's own `.github/workflows` and reported as inline annotations. See [Workflow standards](#workflow-standards-ci-standards-rules-1-4).
+
 ---
 
 ## What the Check Catches
@@ -48,6 +50,56 @@ Rules are defined in [`rules/unbounded-calls.yml`](rules/unbounded-calls.yml) an
 
 ---
 
+## Workflow standards (ci-standards rules 1-4)
+
+`ci-standards` states four structural rules. They are mechanical, so this repository carries them
+as a check instead of as prose: it reads the caller repository's own `.github/workflows/*.yml` and
+annotates every breach, **warn-only** (Waseem, 2026-09-27) — a finding never fails the job,
+whatever `fail-on-findings` says for the unbounded-call scan.
+
+| Annotation | Rule | What is wrong |
+| --- | --- | --- |
+| `job-missing-timeout` | 1 | a job declares no `timeout-minutes` (GitHub's default is 360 minutes) |
+| `job-timeout-over-cap` | 1 | a job declares more than the 30-minute absolute cap |
+| `workflow-missing-concurrency` | 2 | a workflow declares no `concurrency:` group |
+| `workflow-concurrency-no-group` | 2 | a concurrency block carries no non-empty `group` |
+| `push-unfiltered` | 3 | `push:` carries no `branches`/`branches-ignore` filter, so every branch push bills the whole matrix twice |
+| `push-wrong-branch` | 3 | `push.branches` does not include the default branch |
+| `runner-label-literal` | 4 | an organisation job's `runs-on` names a hosted label (`ubuntu-*`, `macos-*`, `windows-*`, `blacksmith-*`) instead of `vars.CI_RUNNER` |
+| `workflow-unparsable` | — | the workflow could not be parsed, so it was not checked (never a silent pass) |
+
+The two rules that need judgement stay in the skill, not here: the ten-minute budget is measured
+over a whole run (this check only reads the declared limits), and a deploy scheduler keeping its own
+group with `cancel-in-progress: false` is correct while a test workflow needs the standard block.
+
+What the check deliberately does not judge, because a warning that is wrong gets ignored:
+
+- **Personal repositories.** `Waseemilyas` repositories run on GitHub-hosted runners, so a literal
+  `ubuntu-latest` there is correct and is not reported. Every organisation repository is.
+- **Expressions and self-hosted labels.** `runs-on: ${{ matrix.os }}`, `runs-on: [self-hosted, linux]`
+  and a literal that is not a hosted label are left alone; only a hosted-label literal is reported.
+- **Timeouts between 10 and 30 minutes.** Whether a workflow is an extended suite is not visible in
+  its YAML, so only the absence of a limit and a value above the 30-minute cap are reported.
+- **`branches-ignore`, tag-only `push:`, and concurrency keys.** A `push:` with only `tags:` does not
+  double-bill branch work, and a different group key may be right for a deploy workflow.
+- **The wrong-branch refinement needs the default branch.** It comes from the event payload; when it
+  is unavailable, only the presence of a branch filter is checked.
+
+Disable the check entirely on a repository that needs to deviate, and say why in that repository:
+
+```yaml
+      - name: Run Estate Checks
+        uses: Automancer-Ltd/estate-checks@v1
+        with:
+          check-workflows: 'false'
+```
+
+The number of workflow warnings is on the action's `workflow-warnings-count` output. Its tests
+(`scripts/test-workflow-standards.py`) pin each rule against a fixture that must be flagged and one
+that must not, so the check is proven to discriminate rather than to exist.
+
+---
+
 ## Known Gaps & Precision Decisions
 
 Under Automancer CI standards, **precision beats recall**: a check that produces false positives will be ignored or disabled. The following patterns are intentionally out of scope:
@@ -56,6 +108,9 @@ Under Automancer CI standards, **precision beats recall**: a check that produces
 2. **Streaming Subprocesses**: Asynchronous long-lived subprocesses started via `spawn(...)` without synchronous completion waits (such as background daemons or piped streams with custom lifecycle management) are not flagged by the sync/exec rules.
 3. **Internal Helper Wrappers**: Generic wrapper functions accepting an options object (e.g. `function customFetch(url, init)`) are not flagged at caller sites when the helper encapsulates the configuration.
 4. **Low-Level Socket APIs**: Direct TCP/TLS socket connections via `net.connect` or `tls.connect` with custom event listeners are not parsed.
+
+For the workflow standards check the precision decisions are listed in
+[its own section](#workflow-standards-ci-standards-rules-1-4).
 
 ---
 
@@ -187,6 +242,9 @@ curl -sS "http://localhost:8080/health"
 ### Releases and Tagging
 - Releases follow Semantic Versioning (e.g. `v1.0.1`).
 - Each release moves the corresponding major tag pointer (e.g. `v1` points to the latest `v1.x.x`).
+- **What a merge deploys:** consumers use the action by tag, so a merge changes nothing until the
+  release tags move. Publishing `vX.Y.Z` and moving `vX` is the deploy; verify it by reading the tag
+  back (`git ls-remote --tags origin v1` must name the merge commit).
 
 ### Automated Updates via Dependabot
 Repos pinning specific release tags (e.g. `uses: Automancer-Ltd/estate-checks@v1.0.1`) can configure Dependabot to automatically propose version bumps.
