@@ -44,6 +44,13 @@ covers every other caller, and the full suite runs on the next standard
 change. If more than `core-max-tests` (default 30) test files name the change,
 it is not a low-risk change and the tier is `standard`.
 
+Convex modules also match their generated API names: `convex/feedback.ts`
+matches `api.feedback` and `internal.feedback`; nested folders become dots
+(`convex/pipeline/data.ts` matches `api.pipeline.data`). Direct imports still
+match. If any changed Convex file has no matching test, the tier is `standard`,
+even if another changed file has tests. A Convex change cannot pass on lint
+and typecheck alone.
+
 Inputs exist for the exceptions:
 - `docs-paths: none` for a repo where markdown is the product (a site,
   a skills repo).

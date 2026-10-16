@@ -179,6 +179,45 @@ class PullRequest(unittest.TestCase):
                          ["tests/unit/cost.test.ts", "tests/unit/effects.test.ts", "tests/unit/own.test.ts",
                           "tests/unit/py_test.py"])
 
+    def test_convex_generated_api_calls_select_the_access_control_tests(self):
+        for module, status in (("feedback", "modified"), ("feedback", "removed"),
+                               ("pipeline/data", "modified"), ("admin/reports/feedback", "modified"),
+                               ("reports/index", "modified")):
+            for namespace in ("api", "internal"):
+                with self.subTest(module=module, status=status, namespace=namespace):
+                    event, routes = pr([changed(f"convex/{module}.ts", 2, status)])
+                    reference = f"{namespace}.{module.replace('/', '.')}"
+                    repo = {
+                        f"convex/{module}.ts": "",
+                        "tests/access.test.ts": f"t.mutation({reference}.submit, {{}});\n",
+                        "tests/direct.test.ts": f'import "../convex/{module}";\n',
+                        "tests/other.test.ts": f"t.query({reference}History.list, {{}});\n",
+                    }
+                    if status == "removed":
+                        del repo[f"convex/{module}.ts"]
+                    result = run_main("pull_request", event, routes, repo)
+                    self.assertEqual(result["tier"], CORE)
+                    self.assertEqual(json.loads(result["direct-tests"]),
+                                     ["tests/access.test.ts", "tests/direct.test.ts"])
+
+    def test_unmatched_convex_change_cannot_skip_the_access_control_suite(self):
+        for status, companion in (("modified", None), ("removed", None),
+                                  ("modified", "tests/other.test.ts"),
+                                  ("modified", "convex/covered.ts")):
+            with self.subTest(status=status, companion=companion):
+                files = [changed("convex/auth.ts", 2, status)]
+                if companion:
+                    files.append(changed(companion))
+                event, routes = pr(files)
+                repo = {"tests/other.test.ts": "test('unrelated', () => {});\n",
+                        "convex/covered.ts": "",
+                        "tests/covered.test.ts": 'import "../convex/covered";\n'}
+                if status != "removed":
+                    repo["convex/auth.ts"] = ""
+                result = run_main("pull_request", event, routes, repo)
+                self.assertEqual(result["tier"], STANDARD)
+                self.assertEqual(json.loads(result["direct-tests"]), [])
+
     def test_small_change_that_many_tests_name_runs_the_full_suite(self):
         event, routes = pr([changed("convex/engine/transition.ts", 1)])
         repo = {"convex/engine/transition.ts": "",
