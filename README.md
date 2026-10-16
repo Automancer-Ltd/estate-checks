@@ -219,7 +219,21 @@ A merge updates source; consumers execute `v1`. Before changing it:
    the runner downloaded the new SHA and its checks behaved correctly.
 
 Rollback: move `v1` back to the recorded previous SHA and read it back. Immutable
-semver tags remain in place. `deploy.json` exposes the live `v1` revision for Guardian.
+semver tags remain in place. `deploy.json` exposes the live `v1` revision for Guardian
+at `https://api.github.com/repos/Automancer-Ltd/estate-checks/commits/v1` (`.sha`).
+
+The checkout belongs to tracker project `estate-ops` as an additional repository.
+That project's primary repo stays `Automancer-Ltd/automancer-ops`.
+
+Web-only estate-watch deploy checks do not apply. They stay visible as warnings
+until a web surface exists, and that visibility is the record:
+
+- no Sentry project, because nothing serves errors to a browser
+- no UptimeRobot monitor, because there is no public URL
+- no `projects.json` or obs `apps.json` registry entry, so `deploy.start` warns
+  that the product is not in the registry
+
+Do not register a fake web product to clear those warnings.
 
 ### Automated Updates via Dependabot
 Repos pinning specific release tags (e.g. `uses: Automancer-Ltd/estate-checks@v1.0.1`) can configure Dependabot to automatically propose version bumps.
