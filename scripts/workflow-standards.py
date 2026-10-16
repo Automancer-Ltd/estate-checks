@@ -12,7 +12,11 @@ belong in a guard, not in 27 KB of incident prose. This check reads
 2. ``workflow-missing-concurrency`` / ``workflow-concurrency-no-group`` — every
    workflow declares a concurrency group.
 3. ``push-unfiltered`` / ``push-wrong-branch`` — ``push:`` carries a branch
-   filter and that filter includes the default branch.
+   filter and that filter includes the default branch. ``workflow-schedule-trigger``
+   — ``on:`` does not include ``schedule``. Checks run once per change, on the
+   pull request (ci-standards, 15 Oct 2026). A hosted monitor with no local
+   dependencies is the documented exception, and only when that workflow is on
+   the allow-list below.
 4. ``runner-label-literal`` — in an organisation repository, ``runs-on`` comes
    from ``vars.CI_RUNNER``, never a literal hosted label.
 
@@ -44,6 +48,15 @@ DEFAULT_WORKFLOWS_DIR = ".github/workflows"
 PERSONAL_OWNERS = {"Waseemilyas"}
 HOSTED_LABEL = re.compile(r"^(ubuntu|macos|windows|blacksmith)-")
 
+# ci-standards, "Choosing where CI runs": a monitor with no local dependencies
+# may run as a hosted scheduled workflow. Every other ``on: schedule`` warns.
+# An entry is "owner/repo:.github/workflows/name.yml". A comment in the
+# workflow does not silence this check; adding a row here is the only way, and
+# the row still warns if that file checks out the repo, calls a local action,
+# or runs on a self-hosted runner. Empty after the 15–16 Oct 2026 campaign:
+# operations moved to auto-vps timers, and no hosted monitor remains.
+HOSTED_MONITOR_SCHEDULES: frozenset[str] = frozenset()
+
 TITLES = {
     "job-missing-timeout": "Job declares no timeout-minutes",
     "job-timeout-over-cap": "Timeout above the 30-minute cap",
@@ -52,6 +65,7 @@ TITLES = {
     "push-unfiltered": "push is not filtered to a branch",
     "push-wrong-branch": "push excludes the default branch",
     "runner-label-literal": "runs-on names a hosted runner label",
+    "workflow-schedule-trigger": "Workflow declares a schedule trigger",
     "workflow-unparsable": "Workflow could not be checked",
 }
 
@@ -274,7 +288,112 @@ def _check_push(doc: Node, path: str, default_branch: str, findings: list[Findin
         )
 
 
-def check_workflow(path: str, text: str, owner: str, default_branch: str) -> list[Finding]:
+def _schedule_line(triggers: Node | None) -> int | None:
+    """Line of an ``on: schedule`` trigger, else None. Comments are not triggers."""
+    from yaml.nodes import MappingNode, ScalarNode, SequenceNode
+
+    if isinstance(triggers, MappingNode):
+        node, line = _find(triggers, "schedule")
+        return line if node is not None else None
+    if isinstance(triggers, SequenceNode):
+        for child in triggers.value:
+            if isinstance(child, ScalarNode) and child.value == "schedule":
+                return child.start_mark.line + 1
+        return None
+    if isinstance(triggers, ScalarNode) and triggers.value == "schedule":
+        return triggers.start_mark.line + 1
+    return None
+
+
+def _descendant_keys(node: Node | None, name: str) -> list[tuple[Node, int]]:
+    """Every (value node, key line) of ``name`` anywhere under ``node``."""
+    from yaml.nodes import MappingNode, SequenceNode
+
+    found: list[tuple[Node, int]] = []
+    if isinstance(node, MappingNode):
+        for key, value, line in _items(node):
+            if key == name:
+                found.append((value, line))
+            found.extend(_descendant_keys(value, name))
+    elif isinstance(node, SequenceNode):
+        for child in node.value:
+            found.extend(_descendant_keys(child, name))
+    return found
+
+
+def _is_hosted_monitor(doc: Node) -> bool:
+    """True when every job is hosted and none checks out this repo or a local action.
+
+    That is the ci-standards exception: a monitor with no local dependencies. A
+    checkout, a ``uses: ./`` action, a self-hosted runner, or a job with no
+    runner is a local dependency, so the schedule still warns.
+    """
+    jobs, _jobs_line = _find(doc, "jobs")
+    job_items = _items(jobs)
+    if not job_items:
+        return False
+    for _job_key, job, _job_line in job_items:
+        for uses, _uses_line in _descendant_keys(job, "uses"):
+            for value in _scalars(uses):
+                stripped = value.strip()
+                if stripped.startswith("./") or stripped.startswith("actions/checkout"):
+                    return False
+        runs_on, _runs_line = _find(job, "runs-on")
+        caller, _caller_line = _find(job, "uses")
+        if runs_on is None:
+            if caller is None:
+                return False
+            continue
+        values = _scalars(runs_on)
+        if not values or any("self-hosted" in value for value in values):
+            return False
+    return True
+
+
+def _check_schedule(
+    doc: Node,
+    path: str,
+    repository: str,
+    allowlist: frozenset[str],
+    findings: list[Finding],
+) -> None:
+    triggers, _line = _find(doc, "on")
+    # PyYAML 1.1 can tag a bare ``on`` key as boolean true. The key text is still
+    # ``on`` under compose; if a resolver ever rewrites it, read that key too.
+    if triggers is None:
+        triggers, _line = _find(doc, "true")
+    line = _schedule_line(triggers)
+    if line is None:
+        return
+    allowed = f"{repository}:{path}" in allowlist if repository else False
+    if allowed and _is_hosted_monitor(doc):
+        return
+    if allowed:
+        message = (
+            "This workflow is on the hosted-monitor allow-list, but it is not a "
+            "hosted monitor with no local dependencies (it checks out this repository, "
+            "calls a local action, or does not run on a hosted runner). Remove "
+            "`on: schedule`, or make the workflow a hosted probe with no checkout."
+        )
+    else:
+        message = (
+            "`on: schedule` runs this workflow on a timer. ci-standards (15 Oct 2026): "
+            "checks run once per change, on the pull request, with no schedules. Move "
+            "the work to `workflow_dispatch` or an auto-vps timer. The only exception "
+            "is a hosted monitor with no local dependencies, and that workflow must be "
+            "named in this check's allow-list; a comment in the workflow does not."
+        )
+    findings.append(Finding("workflow-schedule-trigger", path, line, message))
+
+
+def check_workflow(
+    path: str,
+    text: str,
+    owner: str,
+    default_branch: str,
+    repository: str = "",
+    schedule_allowlist: frozenset[str] | None = None,
+) -> list[Finding]:
     """Every finding for one workflow file, in file order."""
     yaml = _load_yaml()
     if yaml is None:
@@ -313,9 +432,13 @@ def check_workflow(path: str, text: str, owner: str, default_branch: str) -> lis
                 )
             )
             continue
+        allowlist = (
+            HOSTED_MONITOR_SCHEDULES if schedule_allowlist is None else schedule_allowlist
+        )
         _check_jobs(doc, path, owner, findings)
         _check_concurrency(doc, path, findings)
         _check_push(doc, path, default_branch, findings)
+        _check_schedule(doc, path, repository, allowlist, findings)
     return findings
 
 
@@ -330,7 +453,14 @@ def _workflow_files(directory: str) -> list[str]:
     ]
 
 
-def scan(root: str, workflows_dir: str, owner: str, default_branch: str) -> list[Finding]:
+def scan(
+    root: str,
+    workflows_dir: str,
+    owner: str,
+    default_branch: str,
+    repository: str = "",
+    schedule_allowlist: frozenset[str] | None = None,
+) -> list[Finding]:
     findings: list[Finding] = []
     for path in _workflow_files(workflows_dir):
         try:
@@ -342,7 +472,16 @@ def scan(root: str, workflows_dir: str, owner: str, default_branch: str) -> list
             )
             continue
         relative = os.path.relpath(path, root)
-        findings.extend(check_workflow(relative, text, owner, default_branch))
+        findings.extend(
+            check_workflow(
+                relative,
+                text,
+                owner,
+                default_branch,
+                repository,
+                schedule_allowlist,
+            )
+        )
     return findings
 
 
@@ -364,7 +503,8 @@ def emit_summary(findings: list[Finding], summary_path: str | None) -> None:
         + (f"{len(findings)} warning(s)" if findings else "no warnings"),
         "",
         "Warn-only check of ci-standards rules 1-4 (job timeouts, concurrency groups, a "
-        "filtered `push:`, and `runs-on` from `vars.CI_RUNNER`). It never fails this job.",
+        "filtered `push:`, `runs-on` from `vars.CI_RUNNER`, and no `on: schedule` except an "
+        "allow-listed hosted monitor with no local dependencies). It never fails this job.",
         "",
     ]
     if findings:
@@ -375,24 +515,27 @@ def emit_summary(findings: list[Finding], summary_path: str | None) -> None:
             for finding in findings
         ]
     else:
-        lines.append("Every workflow in this repository satisfies all four rules.")
+        lines.append("Every workflow in this repository satisfies the mechanical rules.")
     lines.append("")
     with open(summary_path, "a", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Warn about ci-standards rules 1-4 in this repo's workflows.")
+    parser = argparse.ArgumentParser(
+        description="Warn about ci-standards workflow rules in this repo's workflows."
+    )
     parser.add_argument("--root", default=os.environ.get("GITHUB_WORKSPACE") or os.getcwd())
     parser.add_argument("--workflows-dir", default=None)
     parser.add_argument("--owner", default=os.environ.get("GITHUB_REPOSITORY_OWNER", ""))
+    parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY", ""))
     parser.add_argument("--default-branch", default="")
     parser.add_argument("--json", action="store_true", help="print findings as JSON and nothing else")
     parser.add_argument("--summary", default=os.environ.get("GITHUB_STEP_SUMMARY"))
     args = parser.parse_args(argv)
     root = os.path.abspath(args.root)
     workflows_dir = args.workflows_dir or os.path.join(root, DEFAULT_WORKFLOWS_DIR)
-    findings = scan(root, workflows_dir, args.owner, args.default_branch)
+    findings = scan(root, workflows_dir, args.owner, args.default_branch, args.repository)
     if args.json:
         import json  # noqa: PLC0415
 

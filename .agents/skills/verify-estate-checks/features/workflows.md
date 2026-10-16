@@ -9,4 +9,7 @@ and reports zero while its unbounded-call scanner still reports four findings.
 The count, annotations and job summary prove the result. Workflow warnings stay
 warn-only; `fail-on-findings` controls only the unbounded-call scanner. YAML parse
 errors, anchors, reusable jobs and precision exceptions are independently guarded
-by the existing `scripts/test-workflow-standards.py`, run in CI.
+by the existing `scripts/test-workflow-standards.py`, run in CI. That file also
+pins `workflow-schedule-trigger`: a schedule warns, and an allow-listed hosted
+monitor with no checkout does not. The synthetic `warn` fixture has no schedule,
+so its count stays four.

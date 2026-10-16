@@ -1,5 +1,5 @@
 name: 'Estate Checks'
-description: 'Mechanical CI checks for the Automancer estate: unbounded outside calls, and the workflow rules of ci-standards rules 1-4'
+description: 'Mechanical CI checks for the Automancer estate: unbounded outside calls, and the workflow rules of ci-standards (timeouts, concurrency, push filter, runner variable, no schedule trigger)'
 inputs:
   rules-path:
     description: 'Custom path to Semgrep rules file (defaults to bundled rules/unbounded-calls.yml)'
@@ -26,7 +26,7 @@ inputs:
     required: false
     default: '*.test.*, *_test.py, tests/**, __tests__/**'
   check-workflows:
-    description: 'Warn about ci-standards rules 1-4 in this repository''s workflows (job timeout-minutes, workflow concurrency group, push filtered to the default branch, runs-on from vars.CI_RUNNER). Set to "false" to skip that check. Warning only, never failing.'
+    description: 'Warn about ci-standards workflow rules in this repository''s workflows (job timeout-minutes, workflow concurrency group, push filtered to the default branch, runs-on from vars.CI_RUNNER, no schedule trigger). Set to "false" to skip that check. Warning only, never failing.'
     required: false
     default: 'true'
 outputs:
@@ -34,7 +34,7 @@ outputs:
     description: 'Total number of reported findings'
     value: ${{ steps.scan.outputs.findings_count }}
   workflow-warnings-count:
-    description: 'Number of ci-standards rules 1-4 warnings in this repository''s workflows (0 when the workflow check is skipped)'
+    description: 'Number of ci-standards workflow warnings in this repository''s workflows, including a schedule trigger (0 when the workflow check is skipped)'
     value: ${{ steps.workflow-standards.outputs.warnings_count }}
 
 runs:
@@ -215,6 +215,7 @@ runs:
         INPUT_CHECK_WORKFLOWS: ${{ inputs.check-workflows }}
         ACTION_PATH: ${{ github.action_path }}
         REPO_OWNER: ${{ github.repository_owner }}
+        REPOSITORY: ${{ github.repository }}
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       run: |
         set -euo pipefail
@@ -236,6 +237,7 @@ runs:
         OUTPUT="$(python3 "$ACTION_PATH/scripts/workflow-standards.py" \
           --root "$GITHUB_WORKSPACE" \
           --owner "$REPO_OWNER" \
+          --repository "$REPOSITORY" \
           --default-branch "$DEFAULT_BRANCH")"
         printf '%s\n' "$OUTPUT"
 
