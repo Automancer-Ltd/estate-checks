@@ -236,7 +236,11 @@ def reference_keys(path: str) -> list[str]:
         return [f"{dirs[-1]}/{parts[-1]}"]
     key_parts = dirs[-2:] if stem in FOLDER_MODULES else dirs[-1:] + [stem]
     slash = "/".join(key_parts)
-    return [slash, ".".join(key_parts)] if len(key_parts) > 1 else [slash]
+    keys = [slash, ".".join(key_parts)] if len(key_parts) > 1 else [slash]
+    if path.startswith("convex/") and path.endswith(".ts"):
+        module = path[len("convex/"):-len(".ts")].replace("/", ".")
+        keys.extend((f"api.{module}", f"internal.{module}"))
+    return keys
 
 
 RELATIVE_IMPORT = re.compile(r"""["'](\.{1,2}/[^"'\s]+)["']""")
@@ -256,7 +260,8 @@ def direct_tests(changed: list[str], tracked: list[str], test_globs: list[str], 
     """The tests that name a changed file, plus changed tests.
 
     A test names a file by folder and name (`lib/costEnvelope`), by a relative
-    import that resolves to it (`./build`), or by sitting beside it as
+    import that resolves to it (`./build`), a generated Convex API reference
+    (`api.feedback`, `internal.pipeline.data`), or by sitting beside it as
     `<name>.test.*`. Following every import (vitest related, jest
     --findRelatedTests) selects most of a suite when a small change touches a
     widely imported module: in dungeon-master a one-line change to
@@ -422,7 +427,13 @@ def _scan(state: dict, cfg: Config, root: str) -> Decision:
     tests: list[str] = []
     if tier == CORE:
         tests = direct_tests([f.path for f in files if f.status != "removed"], tracked, cfg.test_globs, root)
-        if len(tests) > cfg.core_max_tests:
+        unmatched = [p for f in files for p in _paths(f) if p.startswith("convex/")
+                     and not direct_tests([p], tracked, cfg.test_globs, root)]
+        if unmatched:
+            tier, reason = STANDARD, (f"{reason}, but no test names Convex file(s): {', '.join(unmatched)}; "
+                                      "running the full suite")
+            tests = []
+        elif len(tests) > cfg.core_max_tests:
             tier, reason = STANDARD, (f"{reason}, but {len(tests)} test files name the changed code "
                                       f"(quick limit {cfg.core_max_tests}); running the full suite")
             tests = []
