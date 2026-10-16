@@ -1,6 +1,6 @@
 # CI tier — run CI in proportion to the change
 
-Last verified: 2026-10-05 on automancer-vps
+Last verified: 2026-10-16 on automancer-vps
 
 `Automancer-Ltd/estate-checks/tier@v1` decides how much CI a change needs.
 Waseem's rule (2026-10-03): a docs-only change runs no CI, a small scoped fix
@@ -111,77 +111,37 @@ configure checkout in other jobs or change history depth or tier selection.
 
 ## Wiring a workflow
 
+Use one job when the complete verdict is under about five minutes. Its name must
+match `job-name` so a later push can find the tested-tree annotation. Scanners run
+even on documentation-only changes. The job has no dependency or job-level
+condition, so it always reports and can be the required context.
+
 ```yaml
 permissions:
   contents: read
-  pull-requests: read   # the PR's file list
-  actions: read         # the merged PR's runs
-  checks: read          # the tested-tree annotation
+  pull-requests: read
+  actions: read
+  checks: read
 
 jobs:
-  tier:
-    name: ci tier            # must equal job-name (default 'ci tier')
+  check:
+    name: check
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
-    timeout-minutes: 3
-    outputs:
-      tier: ${{ steps.tier.outputs.tier }}
-      changed-files: ${{ steps.tier.outputs.changed-files }}
-      direct-tests: ${{ steps.tier.outputs.direct-tests }}
+    timeout-minutes: 10
     steps:
       - id: tier
         uses: Automancer-Ltd/estate-checks/tier@v1
-
-  quick:                      # the core tier's job
-    needs: tier
-    if: needs.tier.outputs.tier == 'core'
-    # lint, typecheck, then the tests in fromJSON(needs.tier.outputs.direct-tests)
-    # (may be empty: then lint and typecheck are the check)
-
-  test:                       # the existing suite
-    needs: tier
-    if: needs.tier.outputs.tier == 'standard'
-
-  ci-gate:
-    name: ci gate
-    if: always()
-    needs: [tier, quick, test]
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
-    timeout-minutes: 5
-    steps:
-      - name: Assert the jobs this tier requires passed
-        env:
-          RESULTS: ${{ toJSON(needs) }}
-          TIER: ${{ needs.tier.outputs.tier }}
-          REQUIRED_none: ''
-          REQUIRED_core: 'quick'
-          REQUIRED_standard: 'test'
-        run: |
-          set -euo pipefail
-          printf '%s\n' "$RESULTS"
-          RESULTS="$RESULTS" TIER="$TIER" node - <<'NODE'
-          const needs = JSON.parse(process.env.RESULTS);
-          const tier = process.env.TIER;
-          const required = process.env[`REQUIRED_${tier}`];
-          if (needs.tier?.result !== "success" || required === undefined) {
-            console.error(`::error::CI gate failed: tier job ${needs.tier?.result}, tier '${tier}'.`);
-            process.exit(1);
-          }
-          const must = required.split(/\s+/).filter(Boolean);
-          for (const [name, { result }] of Object.entries(needs)) {
-            const ok = must.includes(name) ? result === "success" : ["success", "skipped"].includes(result);
-            if (!ok) {
-              console.error(`::error::CI gate failed: ${name} was ${result} on tier '${tier}'.`);
-              process.exit(1);
-            }
-          }
-          console.log(`CI gate green on tier '${tier}' (required: ${must.join(", ") || "nothing"}).`);
-          NODE
+        with:
+          job-name: check
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: Automancer-Ltd/estate-checks@v1
+      # Add the repo's existing setup/lint/typecheck steps here, conditional on
+      # steps.tier.outputs.tier != 'none'. For core, pass direct-tests to the
+      # existing test runner as paths; for standard, run the normal suite.
 ```
 
-The gate requires exactly the jobs the tier names to succeed and every other
-job to have passed or been skipped. A required job that was skipped fails it,
-so a broken `if:` cannot quietly turn CI off.
-
-The tier job is the one standalone job allowed besides the gate and
-`estate-checks`: it bills one runner-minute and saves the whole suite on
-docs-only changes and on already-tested merges.
+A consumer must connect every tier to its actual commands; this snippet only
+shows action placement. CI structure, including the measured exception for
+parallel jobs and deploy workflows, lives in the estate's `ci-standards` skill.

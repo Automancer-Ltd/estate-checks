@@ -11,6 +11,8 @@ auto-vps. It runs Ruff and strict basedpyright; actionlint also runs when instal
 Name only the affected test files, for example:
 `checkq -- scripts/check tier/test_classify.py`.
 CI owns the full suite, Semgrep rule fixtures and composite-action checks.
+For action behaviour or release work, run
+[verify-estate-checks](.agents/skills/verify-estate-checks/SKILL.md).
 
 `pyproject.toml` configures basedpyright and its language server. All production
 Python is included; `rules/` contains deliberately invalid scanner fixtures.
