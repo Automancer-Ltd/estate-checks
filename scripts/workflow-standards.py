@@ -6,7 +6,9 @@ belong in a guard, not in 27 KB of incident prose. This check reads
 ``.github/workflows/*.yml`` in the repository it runs in and annotates:
 
 1. ``job-missing-timeout`` / ``job-timeout-over-cap`` — every job declares
-   ``timeout-minutes``, and none declares more than the 30-minute cap.
+   ``timeout-minutes``, and none declares more than the 30-minute cap. A job
+   that only calls a reusable workflow (``uses:``) is exempt: workflow syntax
+   bans the key on a caller job, and the called workflow bounds its own jobs.
 2. ``workflow-missing-concurrency`` / ``workflow-concurrency-no-group`` — every
    workflow declares a concurrency group.
 3. ``push-unfiltered`` / ``push-wrong-branch`` — ``push:`` carries a branch
@@ -149,6 +151,12 @@ def _check_jobs(doc, path: str, owner: str, findings: list, anchors: dict) -> No
         return
     for job_key, job_node, job_line in _items(jobs, anchors) or []:
         job = _deref(job_node, anchors)
+        uses, _uses_line = _find(job, "uses", anchors)
+        if uses is not None:
+            # A reusable-workflow caller job cannot declare ``timeout-minutes``
+            # or ``runs-on`` — workflow syntax bans both keys there — and the
+            # called workflow bounds its own jobs, so neither rule applies.
+            continue
         timeout, timeout_line = _find(job, "timeout-minutes", anchors)
         if timeout is None:
             findings.append(
