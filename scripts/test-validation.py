@@ -52,17 +52,20 @@ def test_empty_scan_with_in_scope_files_fails() -> None:
 def _diff_repo(files_before: dict, files_after: dict) -> tuple:
     """A throwaway git repo with two commits; returns (root, base_sha)."""
     root = tempfile.mkdtemp()
-    git = lambda *a: subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *a], cwd=root, check=True, capture_output=True, text=True)
+    def git(*a):
+        return subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *a], cwd=root, check=True, capture_output=True, text=True)
     git("init", "-q")
     for name, body in files_before.items():
         os.makedirs(os.path.dirname(os.path.join(root, name)) or root, exist_ok=True)
         open(os.path.join(root, name), "w").write(body)
-    git("add", "."); git("commit", "-qm", "base")
+    git("add", ".")
+    git("commit", "-qm", "base")
     base = git("rev-parse", "HEAD").stdout.strip()
     for name, body in files_after.items():
         os.makedirs(os.path.dirname(os.path.join(root, name)) or root, exist_ok=True)
         open(os.path.join(root, name), "w").write(body)
-    git("add", "."); git("commit", "-qm", "change")
+    git("add", ".")
+    git("commit", "-qm", "change")
     return root, base
 
 

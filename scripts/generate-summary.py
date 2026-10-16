@@ -6,6 +6,38 @@ import json
 import os
 import subprocess
 import sys
+from typing import TypedDict
+
+
+class Position(TypedDict, total=False):
+    line: int
+
+
+class Extra(TypedDict, total=False):
+    message: str
+
+
+class Result(TypedDict, total=False):
+    check_id: str
+    path: str
+    start: Position
+    extra: Extra
+
+
+class ScanError(TypedDict, total=False):
+    level: str
+    type: str
+    message: str
+
+
+class Paths(TypedDict, total=False):
+    scanned: list[str]
+
+
+class ScanData(TypedDict, total=False):
+    errors: list[ScanError | str]
+    paths: Paths
+    results: list[Result]
 
 
 IN_SCOPE_EXTENSIONS = {
@@ -17,7 +49,7 @@ IN_SCOPE_EXTENSIONS = {
 }
 
 
-def _excluded(path: str, patterns: list) -> bool:
+def _excluded(path: str, patterns: list[str]) -> bool:
     """True when any exclude pattern matches the path or one of its trailing sub-paths.
 
     Errs towards "excluded": a wrong match can only hide a crash on a scan that had
@@ -47,7 +79,7 @@ def _is_next_route(path: str) -> bool:
     return name in ("route.ts", "route.js") and ("/app/" in "/" + path)
 
 
-def excluded_server_files(root: str, excludes: list, limit: int = 10) -> list:
+def excluded_server_files(root: str, excludes: list[str], limit: int = 10) -> list[str]:
     """Tracked files an exclude pattern hides that look like server code.
 
     Exclusions are for browser-only code; an API route, server action, worker or
@@ -59,7 +91,7 @@ def excluded_server_files(root: str, excludes: list, limit: int = 10) -> list:
     proc = subprocess.run(["git", "ls-files"], cwd=root, capture_output=True, text=True, timeout=30, check=False)
     if proc.returncode != 0:
         return []
-    hits = []
+    hits: list[str] = []
     for path in proc.stdout.splitlines():
         if os.path.splitext(path)[1].lower() not in IN_SCOPE_EXTENSIONS or not _excluded(path, excludes):
             continue
@@ -79,7 +111,7 @@ def excluded_server_files(root: str, excludes: list, limit: int = 10) -> list:
     return hits
 
 
-def find_in_scope_files(root: str, base_commit: str = "", excludes: list = None, max_check: int = 10) -> list:
+def find_in_scope_files(root: str, base_commit: str = "", excludes: list[str] | None = None, max_check: int = 10) -> list[str]:
     """Files Semgrep should have scanned: changed files since the baseline on a
     differential scan, every tracked file otherwise, minus exclusions."""
     excludes = excludes or []
@@ -88,7 +120,7 @@ def find_in_scope_files(root: str, base_commit: str = "", excludes: list = None,
     if proc.returncode != 0:
         # Cannot tell what should have been scanned: say so rather than guess.
         raise RuntimeError(f"{' '.join(cmd)} failed: {proc.stderr.strip()}")
-    found = []
+    found: list[str] = []
     for line in proc.stdout.splitlines():
         if os.path.splitext(line)[1].lower() in IN_SCOPE_EXTENSIONS and not _excluded(line, excludes):
             found.append(line)
@@ -113,7 +145,7 @@ def main() -> int:
 
     try:
         with open(results_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
+            data: ScanData = json.load(f)
     except Exception as e:
         print(f"::warning::Failed to parse JSON from '{results_file}': {e}", file=sys.stderr)
         return 1
@@ -153,8 +185,8 @@ def main() -> int:
 
     # 3. Deduplicate findings by call site (check_id, path, line)
     raw_results = data.get("results", [])
-    deduped_results = []
-    seen = set()
+    deduped_results: list[Result] = []
+    seen: set[tuple[str | None, str | None, int]] = set()
     for r in raw_results:
         check_id = r.get("check_id")
         path = r.get("path")

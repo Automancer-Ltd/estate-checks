@@ -8,78 +8,55 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+permissions:
+  contents: read
+
 jobs:
-  test:
-    name: rule tests
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-24.04"') }}
-    timeout-minutes: 5
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Set up Semgrep
-        run: |
-          set -euo pipefail
-          pipx install semgrep==1.178.0
-          semgrep --version
-
-      - name: Run Semgrep rule tests
-        run: |
-          set -euo pipefail
-          semgrep --test --legacy rules/
-
-  action-lint:
-    name: action and workflow lint
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-24.04"') }}
-    timeout-minutes: 5
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v7
-
-      - name: Set up actionlint
-        run: |
-          set -euo pipefail
-          mkdir -p "$HOME/.local/bin"
-          bash <(curl -sL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash) latest "$HOME/.local/bin"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          export PATH="$HOME/.local/bin:$PATH"
-          actionlint --version
-
-      - name: Run actionlint
-        run: |
-          set -euo pipefail
-          actionlint
-
-      - name: Validate Semgrep rules syntax
-        run: |
-          set -euo pipefail
-          pipx install semgrep==1.178.0
-          semgrep --validate --config rules/unbounded-calls.yml
-
-  self-test:
-    name: self test composite action
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-24.04"') }}
-    timeout-minutes: 5
+  check:
+    name: check
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Run scan validation and deduplication self-tests
-        run: |
-          set -euo pipefail
-          python3 scripts/test-validation.py
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
-      - name: Run CI tier classifier tests
+      - name: Install check tools
         run: |
           set -euo pipefail
-          python3 -m unittest discover -s tier -v
+          uv sync --frozen
+          uv tool install semgrep==1.178.0
+          mkdir -p "$HOME/.local/bin"
+          curl --fail --silent --show-error --location --max-time 30 \
+            https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash \
+            -o "$RUNNER_TEMP/download-actionlint.bash"
+          bash "$RUNNER_TEMP/download-actionlint.bash" 1.7.12 "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Run workflow standards check tests
+      - name: Scan commit for secrets
         run: |
           set -euo pipefail
-          python3 scripts/test-workflow-standards.py
+          curl --fail --silent --show-error --location --max-time 30 \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            -o "$RUNNER_TEMP/gitleaks.tar.gz"
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" git --redact --no-banner --log-opts=HEAD
+
+      - name: Lint, typecheck and script tests
+        run: scripts/check scripts/test-validation.py scripts/test-workflow-standards.py tier/test_classify.py
+
+      - name: Semgrep rule tests and syntax
+        run: |
+          set -euo pipefail
+          semgrep --test --legacy rules/
+          semgrep --validate --config rules/unbounded-calls.yml
 
       - name: Warn mode — unresolvable baseline warns and does not fail
         id: test-warn
@@ -115,21 +92,3 @@ jobs:
       - name: Run local action
         uses: ./
 
-  ci-gate:
-    name: ci gate
-    if: always()
-    needs: [test, action-lint, self-test]
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-24.04"') }}
-    timeout-minutes: 5
-    steps:
-      - name: Assert every gate job passed or was deliberately skipped
-        env:
-          RESULTS: ${{ toJSON(needs) }}
-        run: |
-          set -euo pipefail
-          printf '%s\n' "$RESULTS"
-          if printf '%s' "$RESULTS" | grep -qE '"result"[[:space:]]*:[[:space:]]*"(failure|cancelled|timed_out|action_required|startup_failure|neutral)"'; then
-            echo "::error::CI gate failed: a job it depends on did not pass."
-            exit 1
-          fi
-          echo "CI gate green."

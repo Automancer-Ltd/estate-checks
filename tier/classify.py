@@ -16,9 +16,11 @@ import sys
 import tempfile
 import urllib.request
 from dataclasses import asdict, dataclass, field
-from typing import Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping, Literal
 
-NONE, CORE, STANDARD = "none", "core", "standard"
+NONE: Literal["none"] = "none"
+CORE: Literal["core"] = "core"
+STANDARD: Literal["standard"] = "standard"
 NOTICE_TITLE = "ci-tier"
 API_TIMEOUT_S = 15
 
@@ -106,7 +108,8 @@ def glob_to_regex(pattern: str) -> re.Pattern[str]:
     A pattern is anchored at the repo root: `*.md` matches only root markdown,
     `docs/**/*.md` matches markdown anywhere under docs/.
     """
-    out, i = [], 0
+    out: list[str] = []
+    i = 0
     while i < len(pattern):
         if pattern.startswith("**/", i):
             out.append("(?:.*/)?")
@@ -146,7 +149,7 @@ def doc_candidates(files: list[ChangedFile], cfg: Config) -> list[str]:
 
 
 def classify(files: list[ChangedFile], cfg: Config, labels: Iterable[str] = (),
-             read_docs: Iterable[str] = ()) -> tuple[str, str]:
+             read_docs: Iterable[str] = ()) -> tuple[Literal["none", "core", "standard"], str]:
     """Return (tier, reason). A doc in `read_docs` is read by code, so it counts as code."""
     labels = set(labels)
     if "ci:full" in labels:
@@ -304,7 +307,7 @@ class Api:
     def __init__(self, base: str, repo: str, token: str):
         self.base, self.repo, self.token = base.rstrip("/"), repo, token
 
-    def get(self, path: str) -> tuple[object, dict[str, str]]:
+    def get(self, path: str) -> tuple[Any, dict[str, str]]:
         url = path if path.startswith("http") else f"{self.base}/repos/{self.repo}/{path}"
         req = urllib.request.Request(url, headers={
             "Authorization": f"Bearer {self.token}",
@@ -314,18 +317,18 @@ class Api:
         with urllib.request.urlopen(req, timeout=API_TIMEOUT_S) as resp:
             return json.load(resp), dict(resp.headers)
 
-    def paged(self, path: str, key: str | None = None, limit: int = 3000) -> list[dict]:
-        items: list[dict] = []
+    def paged(self, path: str, key: str | None = None, limit: int = 3000) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
         url: str | None = path + ("&" if "?" in path else "?") + "per_page=100"
         while url and len(items) < limit:
             body, headers = self.get(url)
-            items.extend(body[key] if key else body)  # type: ignore[index]
+            items.extend(body[key] if key else body)
             nxt = re.search(r'<([^>]+)>;\s*rel="next"', headers.get("Link", "") or headers.get("link", ""))
             url = nxt.group(1) if nxt else None
         return items
 
 
-def _files(raw: list[dict]) -> list[ChangedFile]:
+def _files(raw: list[dict[str, Any]]) -> list[ChangedFile]:
     return [ChangedFile(f["filename"], int(f.get("additions", 0)) + int(f.get("deletions", 0)),
                         f.get("previous_filename"), f.get("status", "modified"))
             for f in raw]
@@ -333,7 +336,7 @@ def _files(raw: list[dict]) -> list[ChangedFile]:
 
 def tree_of(api: Api, sha: str) -> str:
     body, _ = api.get(f"git/commits/{sha}")
-    return body["tree"]["sha"]  # type: ignore[index]
+    return body["tree"]["sha"]
 
 
 def tested_tree_of_run(api: Api, run_id: int, job_name: str) -> str | None:
@@ -356,7 +359,7 @@ def tested_tree_of_run(api: Api, run_id: int, job_name: str) -> str | None:
 def already_tested(api: Api, after: str, workflow_path: str, job_name: str) -> str | None:
     """If the pushed tree is exactly a tree a PR run passed, say which PR."""
     pulls, _ = api.get(f"commits/{after}/pulls")
-    merged = [p for p in pulls if p.get("merged_at") and p.get("merge_commit_sha") == after]  # type: ignore[union-attr]
+    merged = [p for p in pulls if p.get("merged_at") and p.get("merge_commit_sha") == after]
     if not merged:
         return None
     pr = merged[0]
@@ -372,7 +375,7 @@ def already_tested(api: Api, after: str, workflow_path: str, job_name: str) -> s
 
 @dataclass
 class Decision:
-    tier: str
+    tier: Literal["none", "core", "standard"]
     reason: str
     tested_tree: str | None = None  # recorded on PR runs for the later push to main
     files: list[ChangedFile] = field(default_factory=list)
@@ -380,7 +383,7 @@ class Decision:
     direct_tests: list[str] = field(default_factory=list)  # core tier only
 
 
-def decide(event_name: str, event: dict, cfg: Config, api: Api, github_sha: str,
+def decide(event_name: str, event: dict[str, Any], cfg: Config, api: Api, github_sha: str,
            workflow_path: str, job_name: str, default_branch_ref: str) -> Decision:
     if event_name == "pull_request":
         pr = event["pull_request"]
@@ -395,7 +398,7 @@ def decide(event_name: str, event: dict, cfg: Config, api: Api, github_sha: str,
         if skip:
             return Decision(NONE, skip)
         body, _ = api.get(f"compare/{before}...{after}")
-        raw = body.get("files", [])  # type: ignore[union-attr]
+        raw = body.get("files", [])
         if len(raw) >= 300:
             return Decision(STANDARD, "300+ files changed (compare API limit)")
         files = _files(raw)
@@ -403,7 +406,7 @@ def decide(event_name: str, event: dict, cfg: Config, api: Api, github_sha: str,
     return Decision(STANDARD, f"event {event_name} always runs the full suite")
 
 
-def _plan(environ: dict[str, str], cfg: Config, make_api: Callable[[str, str, str], Api]) -> Decision:
+def _plan(environ: Mapping[str, str], cfg: Config, make_api: Callable[[str, str, str], Api]) -> Decision:
     with open(environ["GITHUB_EVENT_PATH"], encoding="utf-8") as fh:
         event = json.load(fh)
     api = make_api(environ.get("GITHUB_API_URL", "https://api.github.com"),
@@ -414,7 +417,7 @@ def _plan(environ: dict[str, str], cfg: Config, make_api: Callable[[str, str, st
                   environ.get("INPUT_JOB_NAME") or "ci tier", default_ref)
 
 
-def _scan(state: dict, cfg: Config, root: str) -> Decision:
+def _scan(state: dict[str, Any], cfg: Config, root: str) -> Decision:
     """Second phase, run in a checkout: docs that code refers to count as code, and
     a core change gets its tests named — or the full suite if too many name it."""
     files = [ChangedFile(**f) for f in state["files"]]
@@ -443,7 +446,7 @@ def _scan(state: dict, cfg: Config, root: str) -> Decision:
     return Decision(tier, reason, state["tested_tree"], files, state["labels"], tests)
 
 
-def main(argv: list[str], environ: dict[str, str] = os.environ,
+def main(argv: list[str], environ: Mapping[str, str] = os.environ,
          make_api: Callable[[str, str, str], Api] = Api) -> int:
     """Phase `plan` decides from the API alone. A small change, or one that hangs on
     whether code reads a changed doc, saves its state and asks the action for a

@@ -32,6 +32,11 @@ import fnmatch
 import os
 import re
 import sys
+from types import ModuleType
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from yaml.nodes import Node
 
 TIMEOUT_CAP_MINUTES = 30
 DEFAULT_WORKFLOWS_DIR = ".github/workflows"
@@ -66,7 +71,7 @@ class Finding:
         return f"Finding({self.rule!r}, {self.path!r}, {self.line}, {self.message!r})"
 
 
-def _load_yaml():
+def _load_yaml() -> ModuleType | None:
     """Return the yaml module, or None when PyYAML is not importable."""
     try:
         import yaml  # noqa: PLC0415 - optional at import time on purpose
@@ -75,89 +80,51 @@ def _load_yaml():
     return yaml
 
 
-def _key_text(node) -> str | None:
-    """The source text of a scalar key, or None for a non-scalar key."""
-    if node is not None and getattr(node, "id", None) == "scalar":
-        return node.value
-    return None
-
-
-def _items(node, anchors: dict) -> list:
+def _items(node: Node | None) -> list[tuple[str, Node, int]]:
     """(key text, value node, key line) for a mapping node, else []."""
-    if node is None or getattr(node, "id", None) != "mapping":
+    from yaml.nodes import MappingNode, ScalarNode
+
+    if not isinstance(node, MappingNode):
         return []
-    out = []
-    for key, value in node.value:
-        if getattr(key, "id", None) != "scalar":
-            continue
-        out.append((key.value, value, key.start_mark.line + 1))
-    return out
+    return [(key.value, value, key.start_mark.line + 1)
+            for key, value in node.value if isinstance(key, ScalarNode)]
 
 
-def _find(node, name: str, anchors: dict):
-    """The (value node, key line) of a mapping key, else (None, None)."""
-    for key, value, line in _items(node, anchors):
+def _find(node: Node | None, name: str) -> tuple[Node | None, int]:
+    """The (value node, key line) of a mapping key, else (None, 1)."""
+    for key, value, line in _items(node):
         if key == name:
             return value, line
-    return None, None
+    return None, 1
 
 
-def _deref(node, anchors: dict):
-    """Follow ``*alias`` nodes to the anchored node."""
-    seen = 0
-    while node is not None and getattr(node, "id", None) == "alias" and seen < 32:
-        node = anchors.get(getattr(node, "anchor", None))
-        seen += 1
-    return node
-
-
-def _scalars(node, anchors: dict) -> list[str]:
+def _scalars(node: Node | None) -> list[str]:
     """Every scalar value under a node (one value, or a sequence of them)."""
-    node = _deref(node, anchors)
-    if node is None:
-        return []
-    if getattr(node, "id", None) == "scalar":
+    from yaml.nodes import ScalarNode, SequenceNode
+
+    if isinstance(node, ScalarNode):
         return [node.value]
-    if getattr(node, "id", None) == "sequence":
-        return [
-            child.value
-            for child in node.value
-            if getattr(_deref(child, anchors), "id", None) == "scalar"
-        ]
+    if isinstance(node, SequenceNode):
+        return [child.value for child in node.value if isinstance(child, ScalarNode)]
     return []
-
-
-def _collect_anchors(node, anchors: dict) -> None:
-    if node is None:
-        return
-    anchor = getattr(node, "anchor", None)
-    if anchor:
-        anchors[anchor] = node
-    for child in getattr(node, "value", []) or []:
-        if isinstance(child, tuple):
-            for part in child:
-                _collect_anchors(part, anchors)
-        else:
-            _collect_anchors(child, anchors)
 
 
 def _job_label(key: str) -> str:
     return f"job {key!r}"
 
 
-def _check_jobs(doc, path: str, owner: str, findings: list, anchors: dict) -> None:
-    jobs, jobs_line = _find(doc, "jobs", anchors)
+def _check_jobs(doc: Node, path: str, owner: str, findings: list[Finding]) -> None:
+    jobs, _jobs_line = _find(doc, "jobs")
     if jobs is None:
         return
-    for job_key, job_node, job_line in _items(jobs, anchors) or []:
-        job = _deref(job_node, anchors)
-        uses, _uses_line = _find(job, "uses", anchors)
+    for job_key, job, job_line in _items(jobs):
+        uses, _uses_line = _find(job, "uses")
         if uses is not None:
             # A reusable-workflow caller job cannot declare ``timeout-minutes``
             # or ``runs-on`` — workflow syntax bans both keys there — and the
             # called workflow bounds its own jobs, so neither rule applies.
             continue
-        timeout, timeout_line = _find(job, "timeout-minutes", anchors)
+        timeout, timeout_line = _find(job, "timeout-minutes")
         if timeout is None:
             findings.append(
                 Finding(
@@ -170,7 +137,7 @@ def _check_jobs(doc, path: str, owner: str, findings: list, anchors: dict) -> No
                 )
             )
         else:
-            values = _scalars(timeout, anchors)
+            values = _scalars(timeout)
             raw = values[0] if values else ""
             if raw.strip().isdigit() and int(raw) > TIMEOUT_CAP_MINUTES:
                 findings.append(
@@ -184,10 +151,10 @@ def _check_jobs(doc, path: str, owner: str, findings: list, anchors: dict) -> No
                     )
                 )
 
-        runs_on, runs_line = _find(job, "runs-on", anchors)
+        runs_on, runs_line = _find(job, "runs-on")
         if runs_on is None or not owner or owner in PERSONAL_OWNERS:
             continue
-        values = _scalars(runs_on, anchors)
+        values = _scalars(runs_on)
         if not values or any("vars.CI_RUNNER" in value for value in values):
             continue  # an expression or a self-hosted label: not this rule's business
         literal = next((value for value in values if HOSTED_LABEL.match(value.strip())), None)
@@ -202,11 +169,10 @@ def _check_jobs(doc, path: str, owner: str, findings: list, anchors: dict) -> No
                     "'\"ubuntu-latest\"') }}` so the monthly runner switch reaches it.",
                 )
             )
-    _ = jobs_line
 
 
-def _check_concurrency(doc, path: str, findings: list, anchors: dict) -> None:
-    concurrency, line = _find(doc, "concurrency", anchors)
+def _check_concurrency(doc: Node, path: str, findings: list[Finding]) -> None:
+    concurrency, line = _find(doc, "concurrency")
     if concurrency is None:
         findings.append(
             Finding(
@@ -221,10 +187,9 @@ def _check_concurrency(doc, path: str, findings: list, anchors: dict) -> None:
             )
         )
         return
-    node = _deref(concurrency, anchors)
-    group, group_line = _find(node, "group", anchors)
+    group, group_line = _find(concurrency, "group")
     if group is not None:
-        if not _scalars(group, anchors) or not _scalars(group, anchors)[0].strip():
+        if not _scalars(group) or not _scalars(group)[0].strip():
             findings.append(
                 Finding(
                     "workflow-concurrency-no-group",
@@ -235,7 +200,7 @@ def _check_concurrency(doc, path: str, findings: list, anchors: dict) -> None:
                 )
             )
         return
-    if _scalars(node, anchors) and _scalars(node, anchors)[0].strip():
+    if _scalars(concurrency) and _scalars(concurrency)[0].strip():
         return  # the short form `concurrency: <group>`
     findings.append(
         Finding(
@@ -248,22 +213,22 @@ def _check_concurrency(doc, path: str, findings: list, anchors: dict) -> None:
     )
 
 
-def _check_push(doc, path: str, default_branch: str, findings: list, anchors: dict) -> None:
-    triggers, _line = _find(doc, "on", anchors)
-    triggers = _deref(triggers, anchors)
+def _check_push(doc: Node, path: str, default_branch: str, findings: list[Finding]) -> None:
+    from yaml.nodes import MappingNode
+
+    triggers, _line = _find(doc, "on")
     if triggers is None:
         return
     event_names = []
-    if getattr(triggers, "id", None) == "mapping":
-        event_names = [key for key, _value, _line in _items(triggers, anchors)]
-        push, push_line = _find(triggers, "push", anchors)
+    if isinstance(triggers, MappingNode):
+        event_names = [key for key, _value, _line in _items(triggers)]
+        push, push_line = _find(triggers, "push")
     else:
-        event_names = _scalars(triggers, anchors)
-        push, push_line = (triggers, triggers.start_mark.line + 1) if "push" in event_names else (None, None)
+        event_names = _scalars(triggers)
+        push, push_line = (triggers, triggers.start_mark.line + 1) if "push" in event_names else (None, 1)
     if "push" not in event_names:
         return
-    push = _deref(push, anchors)
-    if push is None or getattr(push, "id", None) != "mapping":
+    if push is None or not isinstance(push, MappingNode):
         findings.append(
             Finding(
                 "push-unfiltered",
@@ -274,7 +239,7 @@ def _check_push(doc, path: str, default_branch: str, findings: list, anchors: di
             )
         )
         return
-    keys = [key for key, _value, _line in _items(push, anchors)]
+    keys = [key for key, _value, _line in _items(push)]
     has_branches = "branches" in keys or "branches-ignore" in keys
     has_tags = "tags" in keys or "tags-ignore" in keys
     if not has_branches:
@@ -292,8 +257,8 @@ def _check_push(doc, path: str, default_branch: str, findings: list, anchors: di
         return
     if not default_branch:
         return
-    branches_node, branches_line = _find(push, "branches", anchors)
-    branches = _scalars(branches_node, anchors)
+    branches_node, branches_line = _find(push, "branches")
+    branches = _scalars(branches_node)
     if not branches:
         return  # branches-ignore, which this check does not judge
     if not any(fnmatch.fnmatch(default_branch, pattern) for pattern in branches):
@@ -309,7 +274,7 @@ def _check_push(doc, path: str, default_branch: str, findings: list, anchors: di
         )
 
 
-def check_workflow(path: str, text: str, owner: str, default_branch: str) -> list:
+def check_workflow(path: str, text: str, owner: str, default_branch: str) -> list[Finding]:
     """Every finding for one workflow file, in file order."""
     yaml = _load_yaml()
     if yaml is None:
@@ -321,7 +286,9 @@ def check_workflow(path: str, text: str, owner: str, default_branch: str) -> lis
                 "PyYAML is not importable here, so this workflow was not checked.",
             )
         ]
-    findings: list = []
+    from yaml.nodes import MappingNode
+
+    findings: list[Finding] = []
     try:
         docs = [doc for doc in yaml.compose_all(text) if doc is not None]
     except yaml.YAMLError as exc:
@@ -336,7 +303,7 @@ def check_workflow(path: str, text: str, owner: str, default_branch: str) -> lis
             )
         ]
     for doc in docs:
-        if getattr(doc, "id", None) != "mapping":
+        if not isinstance(doc, MappingNode):
             findings.append(
                 Finding(
                     "workflow-unparsable",
@@ -346,11 +313,9 @@ def check_workflow(path: str, text: str, owner: str, default_branch: str) -> lis
                 )
             )
             continue
-        anchors: dict = {}
-        _collect_anchors(doc, anchors)
-        _check_jobs(doc, path, owner, findings, anchors)
-        _check_concurrency(doc, path, findings, anchors)
-        _check_push(doc, path, default_branch, findings, anchors)
+        _check_jobs(doc, path, owner, findings)
+        _check_concurrency(doc, path, findings)
+        _check_push(doc, path, default_branch, findings)
     return findings
 
 
@@ -365,8 +330,8 @@ def _workflow_files(directory: str) -> list[str]:
     ]
 
 
-def scan(root: str, workflows_dir: str, owner: str, default_branch: str) -> list:
-    findings: list = []
+def scan(root: str, workflows_dir: str, owner: str, default_branch: str) -> list[Finding]:
+    findings: list[Finding] = []
     for path in _workflow_files(workflows_dir):
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as handle:
@@ -385,13 +350,13 @@ def _escape(message: str) -> str:
     return message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
-def emit_annotations(findings: list) -> None:
+def emit_annotations(findings: list[Finding]) -> None:
     for finding in findings:
         title = TITLES.get(finding.rule, finding.rule)
         print(f"::warning file={finding.path},line={finding.line},title={title}::{_escape(finding.message)}")
 
 
-def emit_summary(findings: list, summary_path: str | None) -> None:
+def emit_summary(findings: list[Finding], summary_path: str | None) -> None:
     if not summary_path:
         return
     lines = [

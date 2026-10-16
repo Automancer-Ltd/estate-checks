@@ -1,6 +1,6 @@
 # Automancer Estate Checks
 
-Last verified: 2026-10-05 on automancer-vps
+Last verified: 2026-10-16 on automancer-vps
 
 Shared mechanical CI checks for the Automancer estate, centralized in a single repository and invoked by version tag across all estate projects.
 
@@ -145,54 +145,19 @@ Repos adopt the check via the GitHub Actions composite action.
 
 ### GitHub Actions Workflow Snippet
 
-Add `.github/workflows/estate-checks.yml` to the adopting repository:
+Add the scanner as a step in the existing CI job, after its checkout, including
+for docs-only changes. It needs full history for differential scanning:
 
 ```yaml
-name: Estate Checks
-
-on:
-  push:
-    branches: [main]
-  pull_request:
-  workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
-jobs:
-  unbounded-calls:
-    name: check unbounded outside calls
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
-    timeout-minutes: 5
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
-          # fetch-depth: 0 is required so the PR baseline commit can be resolved for differential scanning
           fetch-depth: 0
-
       - name: Run Estate Checks
         uses: Automancer-Ltd/estate-checks@v1
-
-  ci-gate:
-    name: ci gate
-    if: always()
-    needs: [unbounded-calls]
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
-    timeout-minutes: 5
-    steps:
-      - name: Assert gate passed
-        env:
-          RESULTS: ${{ toJSON(needs) }}
-        run: |
-          set -euo pipefail
-          if printf '%s' "$RESULTS" | grep -qE '"result"[[:space:]]*:[[:space:]]*"(failure|cancelled|timed_out|action_required|startup_failure|neutral)"'; then
-            echo "::error::CI gate failed: estate checks did not pass."
-            exit 1
-          fi
-          echo "CI gate green."
 ```
+
+Keep the caller's existing required job. The scanner needs no job or gate of its
+own. CI trigger, runner and timeout rules live in the estate's `ci-standards` skill.
 
 ### Action Inputs
 
@@ -240,11 +205,21 @@ curl -sS "http://localhost:8080/health"
 ## Release Process & Updates
 
 ### Releases and Tagging
-- Releases follow Semantic Versioning (e.g. `v1.0.1`).
-- Each release moves the corresponding major tag pointer (e.g. `v1` points to the latest `v1.x.x`).
-- **What a merge deploys:** consumers use the action by tag, so a merge changes nothing until the
-  release tags move. Publishing `vX.Y.Z` and moving `vX` is the deploy; verify it by reading the tag
-  back (`git ls-remote --tags origin v1` must name the merge commit).
+
+A merge updates source; consumers execute `v1`. Before changing it:
+
+1. Confirm the candidate merge tree passed this repo's required `check` job.
+2. In an owned disposable consumer PR, pin both actions to the candidate SHA.
+   Prove tier outputs and scanner annotations in the runner, then close the PR
+   unmerged. Keep its CI link in the release notes.
+3. Record the old `v1` SHA with `git ls-remote --tags origin refs/tags/v1`.
+4. Create the next semver tag at that candidate, publish its GitHub release, and
+   move `v1` to it. Read both remote tags back and require the candidate SHA.
+5. Invoke `v1` in the disposable consumer once more. A release is verified when
+   the runner downloaded the new SHA and its checks behaved correctly.
+
+Rollback: move `v1` back to the recorded previous SHA and read it back. Immutable
+semver tags remain in place. `deploy.json` exposes the live `v1` revision for Guardian.
 
 ### Automated Updates via Dependabot
 Repos pinning specific release tags (e.g. `uses: Automancer-Ltd/estate-checks@v1.0.1`) can configure Dependabot to automatically propose version bumps.
@@ -257,7 +232,7 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     commit-message:
       prefix: "chore(deps)"
 ```

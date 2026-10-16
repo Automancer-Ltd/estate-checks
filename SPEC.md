@@ -1,9 +1,9 @@
 # Estate Checks — Living Specification
 
-Last verified: 2026-10-15 on automancer-vps
+Last verified: 2026-10-16 on automancer-vps
 
 > Internal living spec. Update the relevant module section in the SAME branch
-> as any behaviour change. Last verified against the code: 2026-09-28.
+> as any behaviour change. Last verified against the code: 2026-10-16.
 
 ## North star
 
@@ -45,7 +45,7 @@ Give repositories a shared CI check for outside network and subprocess calls tha
 
 ### Repository CI (`.github/workflows/ci.yml`)
 
-- What it does: Tests Semgrep rules, validates the action and workflow, runs script self-tests (including the workflow standards fixtures), and checks warning and strict modes on pull requests.
+- What it does: One required `check` job runs Ruff, strict basedpyright on every production Python script, actionlint, Semgrep rule fixtures, script tests and the actual composite action. Warning and strict modes are exercised on pull requests. `scripts/check` is the local quick verdict; it runs only test files named by the caller. Tool versions and PyYAML stubs are locked in `uv.lock`.
 - State: built
 - Shaped by: The rule fixtures, validation tests, and the composite action's public inputs.
 

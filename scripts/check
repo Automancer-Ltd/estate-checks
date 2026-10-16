@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Quick verdict; name the test files for the changed behaviour after this command.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+uv run --frozen ruff check .
+uv run --frozen basedpyright
+if command -v actionlint >/dev/null 2>&1; then
+  actionlint
+fi
+for test_file in "$@"; do
+  uv run --frozen python "$test_file"
+done

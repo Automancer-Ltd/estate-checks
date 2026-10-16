@@ -1,0 +1,16 @@
+[project]
+name = "estate-checks"
+version = "0.0.0"
+requires-python = ">=3.11"
+dependencies = ["PyYAML>=6,<7"]
+
+[dependency-groups]
+dev = ["basedpyright==1.40.2", "ruff==0.14.2", "types-PyYAML>=6,<7"]
+
+[tool.ruff]
+extend-exclude = ["rules"]
+
+[tool.basedpyright]
+include = ["tier/classify.py", "scripts/generate-summary.py", "scripts/workflow-standards.py"]
+typeCheckingMode = "strict"
+pythonVersion = "3.11"
