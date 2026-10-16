@@ -58,6 +58,18 @@ jobs:
           semgrep --test --legacy rules/
           semgrep --validate --config rules/unbounded-calls.yml
 
+      - name: Verify real action journeys
+        run: uv tool run --python 3.12 --from semgrep==1.178.0 --with PyYAML python scripts/verify-estate-checks.py --evidence .audit/ci-proof
+
+      - name: Retain action proof
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: action-proof
+          path: .audit/ci-proof
+          include-hidden-files: true
+          retention-days: 14
+
       - name: Warn mode — unresolvable baseline warns and does not fail
         id: test-warn
         if: github.event_name == 'pull_request'
@@ -91,4 +103,3 @@ jobs:
 
       - name: Run local action
         uses: ./
-

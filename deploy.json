@@ -1,5 +1,7 @@
 {
   "kind": "release",
   "url": "https://api.github.com/repos/Automancer-Ltd/estate-checks/commits/v1",
-  "json_path": ".sha"
+  "json_path": ".sha",
+  "owner": "estate-ops",
+  "grace_hours": 72
 }

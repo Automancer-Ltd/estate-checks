@@ -45,7 +45,7 @@ Give repositories a shared CI check for outside network and subprocess calls tha
 
 ### Repository CI (`.github/workflows/ci.yml`)
 
-- What it does: One required `check` job runs Ruff, strict basedpyright on every production Python script, actionlint, Semgrep rule fixtures, script tests and the actual composite action. Warning and strict modes are exercised on pull requests. `scripts/check` is the local quick verdict; it runs only test files named by the caller. Tool versions and PyYAML stubs are locked in `uv.lock`.
+- What it does: One required `check` job runs Ruff, strict basedpyright on every production Python script, actionlint, Semgrep rule fixtures, script tests and the actual composite action. Warning and strict modes are exercised on pull requests. `scripts/check` is the local quick verdict; it runs only test files named by the caller. Tool versions and PyYAML stubs are locked in `uv.lock`. The project-local `verify-estate-checks` skill executes both action manifests against isolated synthetic consumers and retains their public outputs, annotations and logs. CI runs it and uploads its evidence. Hosted checkout and token behavior are separately proved in a disposable consumer PR before release.
 - State: built
 - Shaped by: The rule fixtures, validation tests, and the composite action's public inputs.
 
