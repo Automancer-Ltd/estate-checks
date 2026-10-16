@@ -7,7 +7,6 @@ Run: python3 scripts/test-workflow-standards.py
 """
 import importlib.util
 import os
-import sys
 import tempfile
 import unittest
 
