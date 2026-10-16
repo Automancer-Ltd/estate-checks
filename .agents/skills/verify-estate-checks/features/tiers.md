@@ -6,6 +6,8 @@ steps against a synthetic PR file API and committed checkout.
 
 - `docs`: unread documentation returns `none`.
 - `small`: one source edit returns `core`.
+- `unmatched-source`: a small non-Convex edit without a matching test stays
+  `core` with an empty test list; the consumer still runs lint and types.
 - `large`: a 51-line source edit returns `standard`.
 - `full-label` and `full-path`: `ci:full` and additional full-path globs each
   return `standard`, including an otherwise small or documentation-only change.

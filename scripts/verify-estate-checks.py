@@ -131,6 +131,8 @@ def verify(evidence: Path) -> None:
                               list[dict[str, str]], str, list[str]]] = [
                 ("docs", {"docs/guide.md": "Guide\n"}, "docs/guide.md", 1, {}, [], "none", []),
                 ("small", common, "src/cost.ts", 1, {}, [], "core", ["tests/cost.test.ts"]),
+                ("unmatched-source", {"src/new.ts": "export const value = 1;\n"},
+                 "src/new.ts", 1, {}, [], "core", []),
                 ("convex", {"convex/feedback.ts": "export const submit = 1;\n",
                             "tests/access.test.ts": "t.mutation(api.feedback.submit, {});\n"},
                  "convex/feedback.ts", 1, {}, [], "core", ["tests/access.test.ts"]),
