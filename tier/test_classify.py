@@ -180,10 +180,12 @@ class PullRequest(unittest.TestCase):
                           "tests/unit/py_test.py"])
 
     def test_convex_generated_api_calls_select_the_access_control_tests(self):
-        for module in ("feedback", "pipeline/data", "admin/reports/feedback", "reports/index"):
+        for module, status in (("feedback", "modified"), ("feedback", "removed"),
+                               ("pipeline/data", "modified"), ("admin/reports/feedback", "modified"),
+                               ("reports/index", "modified")):
             for namespace in ("api", "internal"):
-                with self.subTest(module=module, namespace=namespace):
-                    event, routes = pr([changed(f"convex/{module}.ts", 2)])
+                with self.subTest(module=module, status=status, namespace=namespace):
+                    event, routes = pr([changed(f"convex/{module}.ts", 2, status)])
                     reference = f"{namespace}.{module.replace('/', '.')}"
                     repo = {
                         f"convex/{module}.ts": "",
@@ -191,6 +193,8 @@ class PullRequest(unittest.TestCase):
                         "tests/direct.test.ts": f'import "../convex/{module}";\n',
                         "tests/other.test.ts": f"t.query({reference}History.list, {{}});\n",
                     }
+                    if status == "removed":
+                        del repo[f"convex/{module}.ts"]
                     result = run_main("pull_request", event, routes, repo)
                     self.assertEqual(result["tier"], CORE)
                     self.assertEqual(json.loads(result["direct-tests"]),

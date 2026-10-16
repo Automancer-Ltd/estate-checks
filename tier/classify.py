@@ -426,9 +426,10 @@ def _scan(state: dict, cfg: Config, root: str) -> Decision:
         reason += "; docs read by code: " + ", ".join(f"{d} ({by})" for d, by in sorted(read.items()))
     tests: list[str] = []
     if tier == CORE:
-        tests = direct_tests([f.path for f in files if f.status != "removed"], tracked, cfg.test_globs, root)
-        unmatched = [p for f in files for p in _paths(f) if p.startswith("convex/")
-                     and not direct_tests([p], tracked, cfg.test_globs, root)]
+        convex = [p for f in files for p in _paths(f) if p.startswith("convex/")]
+        tests = direct_tests([f.path for f in files if f.status != "removed"] + convex,
+                             tracked, cfg.test_globs, root)
+        unmatched = [p for p in convex if not direct_tests([p], tracked, cfg.test_globs, root)]
         if unmatched:
             tier, reason = STANDARD, (f"{reason}, but no test names Convex file(s): {', '.join(unmatched)}; "
                                       "running the full suite")
