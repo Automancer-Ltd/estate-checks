@@ -8,7 +8,7 @@ The check inspects code for **unbounded outside network and subprocess calls**�
 
 The repository also ships [`tier`](tier/README.md), a second action that decides how much CI a change needs (none, core or standard) so docs-only changes and already-tested merges skip the suite.
 
-The same action runs a second, pure-Python check: **workflow standards**, the mechanical rules 1-4 of the `ci-standards` skill, read from this repository's own `.github/workflows` and reported as inline annotations. See [Workflow standards](#workflow-standards-ci-standards-rules-1-4).
+The same action runs a second, pure-Python check: **workflow standards**, the mechanical rules 1-4 of the `ci-standards` skill plus rule 3's ban on a `schedule` trigger, read from this repository's own `.github/workflows` and reported as inline annotations. See [Workflow standards](#workflow-standards-ci-standards-rules-1-4).
 
 ---
 
@@ -66,6 +66,7 @@ whatever `fail-on-findings` says for the unbounded-call scan.
 | `push-unfiltered` | 3 | `push:` carries no `branches`/`branches-ignore` filter, so every branch push bills the whole matrix twice |
 | `push-wrong-branch` | 3 | `push.branches` does not include the default branch |
 | `runner-label-literal` | 4 | an organisation job's `runs-on` names a hosted label (`ubuntu-*`, `macos-*`, `windows-*`, `blacksmith-*`) instead of `vars.CI_RUNNER` |
+| `workflow-schedule-trigger` | 3 | `on:` includes `schedule`, so the workflow runs on a timer. Checks run once per change, on the pull request |
 | `workflow-unparsable` | — | the workflow could not be parsed, so it was not checked (never a silent pass) |
 
 The two rules that need judgement stay in the skill, not here: the ten-minute budget is measured
@@ -84,6 +85,15 @@ What the check deliberately does not judge, because a warning that is wrong gets
   double-bill branch work, and a different group key may be right for a deploy workflow.
 - **The wrong-branch refinement needs the default branch.** It comes from the event payload; when it
   is unavailable, only the presence of a branch filter is checked.
+- **A schedule that is not a trigger.** The word `schedule` in a comment, a job name or a step is
+  not a timer. Dependabot's own `schedule:` in `.github/dependabot.yml` is not a workflow trigger
+  and is not read.
+
+`on: schedule` is allowed only for the documented ci-standards exception: a hosted monitor with no
+local dependencies (no checkout, no `uses: ./`, no self-hosted runner). That workflow must be named
+in `HOSTED_MONITOR_SCHEDULES` inside `scripts/workflow-standards.py` as
+`owner/repo:.github/workflows/name.yml`. A comment in the workflow does not silence the warning.
+The list is empty: the 15–16 Oct 2026 campaign moved operations to auto-vps timers.
 
 Disable the check entirely on a repository that needs to deviate, and say why in that repository:
 
