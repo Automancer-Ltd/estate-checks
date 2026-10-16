@@ -84,12 +84,29 @@ class Timeouts(unittest.TestCase):
         self.assertEqual(rules(findings), ["job-timeout-over-cap"])
         self.assertIn("30-minute", findings[0].message)
 
-    def test_reusable_workflow_call_jobs_need_a_timeout_too(self):
-        text = CLEAN.replace("    timeout-minutes: 10\n", "").replace(
-            "    steps:\n      - run: echo ok\n",
-            "    uses: ./.github/workflows/reusable.yml\n",
+    def test_reusable_workflow_caller_jobs_are_exempt(self):
+        # Workflow syntax bans timeout-minutes (and runs-on) on a job that
+        # calls a reusable workflow; the callee bounds its own jobs, so the
+        # check must not demand a key the caller cannot declare.
+        text = CLEAN.replace(
+            "    runs-on: ${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}\n"
+            "    timeout-minutes: 10\n"
+            "    steps:\n"
+            "      - run: echo ok\n",
+            "    uses: ./.github/workflows/reusable.yml\n    secrets: inherit\n",
         )
-        self.assertEqual(rules(run(text)), ["job-missing-timeout"])
+        self.assertEqual(run(text), [])
+
+    def test_reusable_workflow_caller_with_a_timeout_is_still_fine(self):
+        # If a caller job carries the banned key anyway, the schema error is
+        # actionlint's to report; this check has nothing to add.
+        text = CLEAN.replace(
+            "    runs-on: ${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}\n"
+            "    steps:\n"
+            "      - run: echo ok\n",
+            "    timeout-minutes: 10\n    uses: ./.github/workflows/reusable.yml\n",
+        )
+        self.assertEqual(run(text), [])
 
 
 class Concurrency(unittest.TestCase):
