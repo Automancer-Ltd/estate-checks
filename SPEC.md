@@ -1,9 +1,9 @@
 # Estate Checks — Living Specification
 
-Last verified: 2026-10-16 on automancer-vps
+Last verified: 2026-10-17 on automancer-vps
 
 > Internal living spec. Update the relevant module section in the SAME branch
-> as any behaviour change. Last verified against the code: 2026-10-16.
+> as any behaviour change. Last verified against the code: 2026-10-17.
 
 ## North star
 
@@ -51,7 +51,7 @@ Give repositories a shared CI check for outside network and subprocess calls tha
 
 ### CI tier action (`tier/`)
 
-- What it does: Classifies a pull request or default-branch push as `none`, `core` or `standard` from the changed files, per-repo docs and full-suite globs, and size limits. On a default-branch push it skips when the pushed tree equals the tree the merged PR's passing run recorded. Any failure resolves to `standard`. Tests for Convex modules are also selected by generated `api.<path>` and `internal.<path>` references. If any changed Convex file has no matching test, the tier is `standard`, including when other changed files have tests. Optional `sparse-checkout` and `sparse-checkout-cone-mode` inputs control its conditional checkout. Defaults keep a full checkout with cone mode enabled. Consumers must retain all code, tests, docs and configuration the classifier reads.
+- What it does: Classifies a pull request or default-branch push as `none`, `core` or `standard` from the changed files, per-repo docs and full-suite globs, and size limits. On a default-branch push it skips when the pushed tree equals the tree the merged PR's passing run recorded. Any failure resolves to `standard`. Tests for Convex modules are also selected by generated `api.<path>` and `internal.<path>` references. If any changed Convex file has no matching test, the tier is `standard`, including when other changed files have tests. Optional `sparse-checkout` and `sparse-checkout-cone-mode` inputs control its conditional checkout. Defaults keep a full checkout with cone mode enabled. Consumers must retain all code, tests, docs and configuration the classifier reads. Optional `docs-include` names a non-runtime agent or skill directory as documentation even though `.agents/**` and `**/skills/**` are excluded by default. It cannot reclassify product, content, page or test markdown, and it does not override full-paths or reader detection. Estate and secret scans stay the consumer's unconditional steps.
 - State: built
 - Shaped by: Waseem's proportionate-CI decisions of 2026-10-03 (`auto/plans/ci-proportionate-2026-10-03.md`) and the cases in `tier/test_classify.py`.
 

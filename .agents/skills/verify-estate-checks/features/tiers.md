@@ -5,6 +5,11 @@ A consumer invokes `Automancer-Ltd/estate-checks/tier@v1` and uses its `tier` an
 steps against a synthetic PR file API and committed checkout.
 
 - `docs`: unread documentation returns `none`.
+- `agent-skill-markdown`: a large Markdown change under `.agents/skills/` stays
+  `standard` until `docs-include` names that directory.
+- `docs-include`: the named non-runtime directory returns `none` when no code
+  reads it. `docs-include-product` keeps product Markdown on `standard`.
+  `docs-include-read` returns `core` when a script reads the included file.
 - `small`: one source edit returns `core`.
 - `unmatched-source`: a small non-Convex edit without a matching test stays
   `core` with an empty test list; the consumer still runs lint and types.
