@@ -51,6 +51,15 @@ class Gate(unittest.TestCase):
         with self.assertRaises(Undecided):
             decide(pr(401), REVERT_PATCH, [], [big], [""])
 
+    def test_flag_words_not_substrings(self):  # review 3 blocker 2
+        def hit(name, v="true"):
+            w = {"number": 5, "title": "x", "shas": [], "files": [{"filename": "a.ts", "patch": "+export const %s = %s;" % (name, v)}]}
+            return len(config_overlap([{"filename": "a.ts", "patch": "-export const %s = %s;" % (name, v)}], [w]))
+        for flag in ("stripeLive", "StripeLive", "LiveMode", "FeatureEnabled", "dry_run", "kill-switch"):
+            self.assertEqual(hit(flag), 1, flag)
+        for plain in ("model", "modern", "delivered", "threshold", "placeholder", "allowance", "retries"):
+            self.assertEqual(hit(plain), 0, plain)
+
     def test_plain_initialisers_and_yaml_collisions_are_routine(self):  # review 2 blocker 2
         w = {"number": 5, "title": "x", "shas": [], "files": [{"filename": "a.ts", "patch": "+const retries = 0;\n+const index = 1;"},
              {"filename": "docker-compose.yml", "patch": "+    name: web"}]}

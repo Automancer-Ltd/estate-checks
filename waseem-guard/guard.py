@@ -36,13 +36,28 @@ CONFIG_BASENAMES = (r"wrangler[\w.\-]*\.jsonc?", r"\.env(\.[\w.\-]+)?", r"[\w.\-
                     r"[\w.\-]+\.service", r"[\w.\-]+\.timer")
 # Lockfiles, CI workflows and dependency manifests repeat lines everywhere; they are not settings.
 NOT_CONFIG = (r"(^|/)[^/]*lock[^/]*$", r"(^|/)\.github/workflows/", r"(^|/)(Cargo|pyproject)\.toml$", r"(^|/)pnpm-workspace\.yaml$")
-# Outside config files a line is a flag when it is ENV_STYLE, or a flag-named identifier set to a boolean.
-HINT = r"(?:enabled?|disabled?|live|flags?|feature|mode|driver|allow\w*|skip\w*|strict|debug|stripe|payments?|kill|hold|paused?|dry_?run)"
-FLAGLINE = re.compile(r"^(?:export\s+)?(?:(?:const|let|var)\s+)?[\"']?(?:[A-Z][A-Z0-9_]{2,}|[A-Za-z_]*" + HINT + r"[A-Za-z_]*)[\"']?\s*[=:]\s*(?:true|false)\s*[,;]?$|^[\"']?[A-Z][A-Z0-9_]{2,}[\"']?\s*[=:]\s*\S")
+# Outside config files a line is a flag when it is ENV_STYLE, or a name made of flag WORDS set to a boolean.
+# Words, not substrings: `model` and `delivered` are not `mode` and `live`.
+FLAG_WORDS = {"enable", "enabled", "disable", "disabled", "live", "flag", "flags", "feature", "mode", "driver", "allow", "allowed", "skip", "strict",
+              "debug", "stripe", "payment", "payments", "kill", "hold", "pause", "paused", "dryrun", "dry", "run", "switch", "toggle", "on", "off"}
+BOOLLINE = re.compile(r"^(?:export\s+)?(?:(?:const|let|var)\s+)?[\"']?([A-Za-z_][\w.\-]*)[\"']?\s*[=:]\s*(?:true|false)\s*[,;]?$")
+ENVLINE = re.compile(r"^[\"']?[A-Z][A-Z0-9_]{2,}[\"']?\s*[=:]\s*\S")
+
+
+def key_words(key):
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", key)
+    return {w.lower() for w in re.split(r"[^A-Za-z0-9]+", spaced) if w}
 
 
 def is_flag_key(key):
-    return bool(re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", key) or re.search(HINT, key, re.I))
+    return bool(re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", key) or key_words(key) & FLAG_WORDS)
+
+
+def is_flag_line(line):
+    m = BOOLLINE.match(line)
+    return bool(ENVLINE.match(line) or (m and is_flag_key(m.group(1))))
+
+
 KEYVAL = re.compile(r"^(?:export\s+)?(?:(?:const|let|var)\s+)?[\"']?([A-Za-z_][\w.\-]*)[\"']?\s*[=:]\s*(.+?)\s*,?$")
 APPROVAL = re.compile(r"Waseem-approved:\s*(?:https?://\S*/)?([dtnc]\d{1,6})\b", re.I)
 
@@ -100,12 +115,12 @@ def config_overlap(pr_files, waseem_prs):
                 hers = [x for x in patch_lines(wf.get("patch"), "+") if substantive(x)]
                 hset = set(hers)
                 for line in removed:
-                    if line in hset and (flaggy or FLAGLINE.match(line)):
+                    if line in hset and (flaggy or is_flag_line(line)):
                         hits.append({"file": pf["filename"], "line": line[:120], "pr": wp["number"], "title": wp.get("title", ""), "how": "removes"})
                 his_kv = {}
                 for line in hers:
                     kv = keyval(line)
-                    if kv and is_flag_key(kv[0]) and (flaggy or FLAGLINE.match(line)):
+                    if kv and is_flag_key(kv[0]) and (flaggy or is_flag_line(line)):
                         his_kv[kv[0]] = kv[1]
                 for line in added_here:
                     kv = keyval(line)
