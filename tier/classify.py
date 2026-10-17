@@ -37,13 +37,19 @@ class ChangedFile:
 # zero-config rules, 2026-10-03). Repo inputs add to these lists; `docs-paths`
 # replaces DEFAULT_DOCS, and `docs-paths: none` means nothing is docs.
 DEFAULT_DOCS = ["**/*.md", "**/*.rst"]
-# Markdown in these places is usually product, content or test data, not docs.
-DEFAULT_DOCS_EXCLUDE = [
+# Product, content, page and test markdown is never documentation. `docs-include`
+# cannot reclassify it: a broad include must not weaken that safeguard.
+PRODUCT_DOCS_EXCLUDE = [
     "src/**", "**/src/**", "**/content/**", "**/_posts/**", "**/pages/**",
-    "**/skills/**", "**/prompts/**", "**/templates/**", ".agents/**", ".claude/**",
     "**/public/**", "**/static/**", "**/fixtures/**", "**/__fixtures__/**",
     "**/testdata/**", "**/test/**", "**/tests/**", "**/__tests__/**",
 ]
+# Agent and skill markdown is excluded by default because it is often runtime
+# content. A repository may explicitly include one non-runtime directory.
+AGENT_DOCS_EXCLUDE = [
+    "**/skills/**", "**/prompts/**", "**/templates/**", ".agents/**", ".claude/**",
+]
+DEFAULT_DOCS_EXCLUDE = PRODUCT_DOCS_EXCLUDE + AGENT_DOCS_EXCLUDE
 # Inputs whose effect related-test selection cannot see.
 DEFAULT_FULL = [
     ".github/**",
@@ -80,6 +86,7 @@ FOLDER_MODULES = {"index", "__init__", "mod", "main"}
 class Config:
     docs: list[str] = field(default_factory=lambda: list(DEFAULT_DOCS))
     docs_exclude: list[str] = field(default_factory=lambda: list(DEFAULT_DOCS_EXCLUDE))
+    docs_include: list[str] = field(default_factory=list)
     full: list[str] = field(default_factory=lambda: list(DEFAULT_FULL))
     small_max_files: int = 3
     small_max_lines: int = 50
@@ -89,11 +96,13 @@ class Config:
     @classmethod
     def from_inputs(cls, docs: str = "", docs_exclude: str = "", full: str = "",
                     small_max_files: str = "", small_max_lines: str = "",
-                    core_max_tests: str = "", test_globs: str = "") -> "Config":
+                    core_max_tests: str = "", test_globs: str = "",
+                    docs_include: str = "") -> "Config":
         declared = parse_list(docs)
         return cls(
             docs=[] if declared == ["none"] else (declared or list(DEFAULT_DOCS)),
             docs_exclude=DEFAULT_DOCS_EXCLUDE + parse_list(docs_exclude),
+            docs_include=parse_list(docs_include),
             full=DEFAULT_FULL + parse_list(full),
             small_max_files=int(small_max_files or 3),
             small_max_lines=int(small_max_lines or 50),
@@ -142,10 +151,24 @@ def _paths(f: ChangedFile) -> list[str]:
 
 
 def doc_candidates(files: list[ChangedFile], cfg: Config) -> list[str]:
-    """Changed paths the globs call documentation, before checking who reads them."""
+    """Changed paths the globs call documentation, before checking who reads them.
+
+    `docs-include` can name a non-runtime agent or skill directory. It does not
+    reclassify product, content, page or test markdown, and a path still has to
+    match the documentation globs. `full-paths` is decided before this runs.
+    """
     docs = [glob_to_regex(p) for p in cfg.docs]
     excluded = [glob_to_regex(p) for p in cfg.docs_exclude]
-    return sorted({p for f in files for p in _paths(f) if _matches(p, docs) and not _matches(p, excluded)})
+    included = [glob_to_regex(p) for p in cfg.docs_include]
+    product = [glob_to_regex(p) for p in PRODUCT_DOCS_EXCLUDE]
+    chosen: set[str] = set()
+    for f in files:
+        for path in _paths(f):
+            if not _matches(path, docs) or _matches(path, product):
+                continue
+            if _matches(path, included) or not _matches(path, excluded):
+                chosen.add(path)
+    return sorted(chosen)
 
 
 def classify(files: list[ChangedFile], cfg: Config, labels: Iterable[str] = (),
@@ -458,7 +481,7 @@ def main(argv: list[str], environ: Mapping[str, str] = os.environ,
         cfg = Config.from_inputs(environ.get("INPUT_DOCS_PATHS", ""), environ.get("INPUT_DOCS_EXCLUDE", ""),
                                  environ.get("INPUT_FULL_PATHS", ""), environ.get("INPUT_SMALL_MAX_FILES", ""),
                                  environ.get("INPUT_SMALL_MAX_LINES", ""), environ.get("INPUT_CORE_MAX_TESTS", ""),
-                                 environ.get("INPUT_TEST_GLOBS", ""))
+                                 environ.get("INPUT_TEST_GLOBS", ""), environ.get("INPUT_DOCS_INCLUDE", ""))
         if phase == "scan":
             with open(state_path, encoding="utf-8") as fh:
                 d = _scan(json.load(fh), cfg, environ.get("GITHUB_WORKSPACE") or os.getcwd())

@@ -46,6 +46,26 @@ class Classify(unittest.TestCase):
         self.assertEqual(classify([f("pnpm-lock.yaml", 1)], Config.from_inputs(full="scripts/deploy.mjs"))[0], STANDARD)
         self.assertEqual(classify([f("docs/x.md")], Config.from_inputs(docs_exclude="docs/x.md"))[0], CORE)
 
+    def test_docs_include_names_a_non_runtime_directory_and_cannot_hide_product(self):
+        """Dissidium t2887: verification-skill markdown is not product, but the
+        default agent/skill excludes still force the full suite."""
+        skill = [f(f".agents/skills/verify-dissidium/features/{i}.md", 20) for i in range(6)]
+        self.assertEqual(classify(skill, DEFAULTS)[0], STANDARD)
+        included = Config.from_inputs(docs_include=".agents/skills/verify-dissidium/**")
+        self.assertEqual(classify(skill, included)[0], NONE)
+        self.assertEqual(classify([f(".agents/skills/other/SKILL.md", 80)], included)[0], STANDARD)
+        self.assertEqual(classify([f(".github/workflows/ci.yml", 1)], included)[0], STANDARD)
+        renamed = f(".agents/skills/verify-dissidium/SKILL.md", 1, prev="src/README.md")
+        self.assertEqual(classify([renamed], included)[0], CORE)
+        broad = Config.from_inputs(docs_include="**")
+        for path in ("src/README.md", "content/posts/a.md", "pages/home.md", "public/notes.md",
+                     "tests/fixtures/a.md", "app/src/styles/README.md"):
+            with self.subTest(path=path):
+                self.assertNotEqual(classify([f(path, 80)], broad)[0], NONE)
+        self.assertEqual(classify([f("src/app.ts", 80)], broad)[0], STANDARD)
+        still_product = Config.from_inputs(docs="none", docs_include=".agents/skills/verify-dissidium/**")
+        self.assertEqual(classify(skill, still_product)[0], STANDARD)
+
     def test_full_label_overrides_docs(self):
         self.assertEqual(classify([f("README.md")], DEFAULTS, ["ci:full"])[0], STANDARD)
 
@@ -121,6 +141,31 @@ class PullRequest(unittest.TestCase):
         event, routes = pr([changed("docs/plans/a.md", 40), changed("README.md")])
         repo = {"docs/plans/a.md": "", "README.md": "", "app/x.ts": "// see docs/plans/b.md\n"}
         self.assertEqual(run_main("pull_request", event, routes, repo)["tier"], NONE)
+
+    def test_verification_skill_markdown_is_not_documentation_until_named(self):
+        files = [changed(".agents/skills/verify-dissidium/SKILL.md", 40),
+                 changed(".agents/skills/verify-dissidium/features/index.md", 20)]
+        event, routes = pr(files)
+        repo = {
+            ".agents/skills/verify-dissidium/SKILL.md": "Verify\n",
+            ".agents/skills/verify-dissidium/features/index.md": "Map\n",
+            "AGENTS.md": "See .agents/skills/verify-dissidium/SKILL.md\n",
+            "scripts/build.sh": "echo ok\n",
+        }
+        self.assertEqual(run_main("pull_request", event, routes, repo)["tier"], STANDARD)
+        included = run_main("pull_request", event, routes, repo,
+                            extra_env={"INPUT_DOCS_INCLUDE": ".agents/skills/verify-dissidium/**"})
+        self.assertEqual(included["tier"], NONE)
+
+    def test_included_verification_doc_a_script_reads_is_code(self):
+        event, routes = pr([changed(".agents/skills/verify-dissidium/SKILL.md", 40)])
+        repo = {
+            ".agents/skills/verify-dissidium/SKILL.md": "Verify\n",
+            "scripts/read.sh": "cat .agents/skills/verify-dissidium/SKILL.md\n",
+        }
+        result = run_main("pull_request", event, routes, repo,
+                          extra_env={"INPUT_DOCS_INCLUDE": ".agents/skills/verify-dissidium/**"})
+        self.assertEqual(result["tier"], CORE)
 
     def test_docs_only_cited_in_comments_still_run_nothing(self):
         event, routes = pr([changed("docs/RUNBOOK.md", 4), changed("AGENTS.md", 2)])

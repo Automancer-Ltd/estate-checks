@@ -17,6 +17,10 @@ inputs:
     description: 'Optional. Extra globs that are never documentation, added to the built-in list.'
     required: false
     default: ''
+  docs-include:
+    description: 'Optional. Globs that count as documentation even when they match the built-in agent or skill excludes (.agents/, skills/, prompts/, templates/, .claude/). Does not reclassify product, content, page or test markdown, and does not override full-paths. Empty by default.'
+    required: false
+    default: ''
   full-paths:
     description: 'Optional. Extra globs that always need the full suite, added to the built-in list (lockfiles, CI, toolchain config, schema, migrations, deploy config).'
     required: false
@@ -69,6 +73,7 @@ runs:
         INPUT_PHASE: plan
         INPUT_DOCS_PATHS: ${{ inputs.docs-paths }}
         INPUT_DOCS_EXCLUDE: ${{ inputs.docs-exclude }}
+        INPUT_DOCS_INCLUDE: ${{ inputs.docs-include }}
         INPUT_FULL_PATHS: ${{ inputs.full-paths }}
         INPUT_SMALL_MAX_FILES: ${{ inputs.small-max-files }}
         INPUT_SMALL_MAX_LINES: ${{ inputs.small-max-lines }}
@@ -97,6 +102,7 @@ runs:
         INPUT_PHASE: scan
         INPUT_DOCS_PATHS: ${{ inputs.docs-paths }}
         INPUT_DOCS_EXCLUDE: ${{ inputs.docs-exclude }}
+        INPUT_DOCS_INCLUDE: ${{ inputs.docs-include }}
         INPUT_FULL_PATHS: ${{ inputs.full-paths }}
         INPUT_SMALL_MAX_FILES: ${{ inputs.small-max-files }}
         INPUT_SMALL_MAX_LINES: ${{ inputs.small-max-lines }}

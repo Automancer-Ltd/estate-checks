@@ -1,6 +1,6 @@
 # CI tier — run CI in proportion to the change
 
-Last verified: 2026-10-16 on automancer-vps
+Last verified: 2026-10-17 on automancer-vps
 
 `Automancer-Ltd/estate-checks/tier@v1` decides how much CI a change needs.
 Waseem's rule (2026-10-03): a docs-only change runs no CI, a small scoped fix
@@ -23,7 +23,11 @@ Most repositories pass no inputs. The built-in lists live in `classify.py`:
 - **Documentation:** every `.md` and `.rst` file, except under folders where
   markdown is usually product, content or test data (`src/`, `content/`,
   `pages/`, `_posts/`, `skills/`, `prompts/`, `templates/`, `public/`,
-  `static/`, `.agents/`, `.claude/`, fixtures and test folders).
+  `static/`, `.agents/`, `.claude/`, fixtures and test folders). Product,
+  content, page and test markdown stays excluded even if a repository passes
+  `docs-include`. That input can name one non-runtime agent or skill directory
+  (for example `.agents/skills/verify-dissidium/**`) so a Markdown-only change
+  there is documentation. Code that reads an included file still makes it code.
 - **Always the full suite:** CI files, dependency manifests and lockfiles,
   toolchain and runtime versions, TypeScript/lint/test/bundler config,
   Dockerfiles, schema files, SQL and migrations, and hosting config.
@@ -58,6 +62,9 @@ Inputs exist for the exceptions:
   scripts, shared test harness), so a small change there still runs the full
   suite.
 - `docs-paths` / `docs-exclude` to replace or narrow the documentation default.
+- `docs-include` to name a non-runtime agent or skill directory as
+  documentation. It does not reclassify product, content, page or test
+  markdown, and it does not override `full-paths` or reader detection.
 
 ## Sparse checkout for asset-heavy repositories
 

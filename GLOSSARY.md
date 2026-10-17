@@ -24,3 +24,8 @@ A later default-branch push can reuse that proof only for the same tree.
 
 **Full paths**: Consumer patterns that add to the files requiring `standard`,
 even for a small change.
+
+**Documentation include**: Optional globs that count as documentation even when
+they match the built-in agent or skill excludes. They cannot reclassify product,
+content, page or test markdown, and code that reads an included file still
+counts as code.

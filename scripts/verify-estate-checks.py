@@ -142,6 +142,21 @@ def verify(evidence: Path) -> None:
                 ("full-path", common, "src/cost.ts", 1, {"full-paths": "src/**"}, [], "standard", []),
                 ("full-label", {"docs/guide.md": "Guide\n"}, "docs/guide.md", 1, {},
                  [{"name": "ci:full"}], "standard", []),
+                ("agent-skill-markdown", {
+                    ".agents/skills/verify-dissidium/SKILL.md": "Verify\n"},
+                 ".agents/skills/verify-dissidium/SKILL.md", 80, {}, [], "standard", []),
+                ("docs-include", {
+                    ".agents/skills/verify-dissidium/SKILL.md": "Verify\n",
+                    "scripts/other.sh": "echo ok\n"},
+                 ".agents/skills/verify-dissidium/SKILL.md", 80,
+                 {"docs-include": ".agents/skills/verify-dissidium/**"}, [], "none", []),
+                ("docs-include-product", {"src/README.md": "Product\n"}, "src/README.md", 80,
+                 {"docs-include": "**"}, [], "standard", []),
+                ("docs-include-read", {
+                    ".agents/skills/verify-dissidium/SKILL.md": "Verify\n",
+                    "scripts/read.sh": "cat .agents/skills/verify-dissidium/SKILL.md\n"},
+                 ".agents/skills/verify-dissidium/SKILL.md", 4,
+                 {"docs-include": ".agents/skills/verify-dissidium/**"}, [], "core", []),
             ]
             for name, files, changed, lines, inputs, labels, want, tests in cases:
                 dest = evidence / name

@@ -25,6 +25,8 @@ No generated code or build is needed for symbol navigation.
 - Which tests run for file X? `direct_tests` uses `reference_keys`, relative
   imports and neighbouring test names. `tier/action.yml` exposes `direct-tests`.
 - Force full CI? `ci:full`, `full-paths` or size limits; see `tier/README.md`.
+  `docs-include` names one non-runtime directory as documentation; product
+  markdown stays excluded (`tier/classify.py:doc_candidates`).
 - Scanner annotations/counts: `scripts/generate-summary.py`; workflow warnings:
   `scripts/workflow-standards.py`. Rules and positive/negative fixtures: `rules/`.
 
@@ -35,4 +37,4 @@ procedure in `README.md` before changing tags. Preserve green exact-head CI and
 prove the candidate in a disposable consumer PR before moving `v1`. Keep the
 previous tag SHA for rollback. `deploy.json` names the live revision read.
 
-Last verified: 2026-10-16 on auto-vps.
+Last verified: 2026-10-17 on auto-vps.
