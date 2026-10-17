@@ -1,7 +1,12 @@
 """Run: python3 waseem-guard/test_guard.py"""
 import unittest
 
-from guard import Undecided, approved, config_overlap, decide, detect_revert, find_approval, is_config_file, pages
+import os
+import subprocess
+import tempfile
+
+import guard
+from guard import Undecided, approved, config_overlap, decide, detect_revert, find_approval, git_diff, is_config_file, is_his, pages
 
 REPO = "IQ-Mouldings/rochdale-self-storage"
 STRIPE = {"number": 383, "title": "Rochdale: Stripe live", "shas": ["05c236e7aaaa"],
@@ -124,6 +129,121 @@ class Completeness(unittest.TestCase):
                 pages("repos/o/r/pulls/1/files", limit=3)
         finally:
             guard.gh = orig
+
+
+class HisOrHelper(unittest.TestCase):
+    def test_branch_and_body_tell_his_from_a_helper(self):  # Waseem 17 Oct: #620 s1289/... is a helper PR
+        for ref in ("ops/stripe-live", "revert-389-restore-stripe-live", "feature/checkout", "main-fix"):
+            self.assertTrue(is_his(ref, "Flip PAYMENT_DRIVER."), ref)
+        for ref in ("s1289/ungated-card-paths", "s1359/hold-live-payments", "ln-3fbe2832", "lane/x", "fix/cards", "devin/abc", "shape/cards", "dependabot/npm/x", "chair-thr_1/x", "bb/lane-xstate-gandalf-thr_ad62ffutqf", "bb/fix-scrollbar-jitter-during-turns-thr_9cry3tktsy", "st9-p80/csp-stripe-subdomains", "plan/p12"):
+            self.assertFalse(is_his(ref, ""), ref)
+        # His own interactive lane signs its PRs "Generated with Claude Code" (#383): that must still count as his.
+        self.assertTrue(is_his("ops/stripe-live", "Undo: set it back.\n\n\U0001F916 Generated with [Claude Code](https://claude.com/claude-code)"))
+        self.assertFalse(is_his("tidy", "Opened by helper s1289 for the lane."))
+
+    def test_helper_pr_is_not_loaded_and_its_files_are_never_fetched(self):
+        calls = []
+        merged = "2026-10-16T10:00:00Z"
+        closed = [{"number": 620, "title": "ungated", "merged_at": merged, "updated_at": merged, "user": {"login": "Waseemilyas"}, "body": "", "head": {"ref": "s1289/ungated-card-paths", "sha": "a"}, "merge_commit_sha": "b"},
+                  {"number": 383, "title": "live", "merged_at": merged, "updated_at": merged, "user": {"login": "Waseemilyas"}, "body": "", "head": {"ref": "ops/stripe-live", "sha": "c"}, "merge_commit_sha": "d"}]
+        orig_pages, orig_gh = guard.pages, guard.gh
+
+        def fake_pages(path, *a, **k):
+            calls.append(path)
+            return closed if "state=closed" in path else [{"filename": "wrangler.jsonc", "patch": "+x", "changes": 1}]
+        guard.pages = fake_pages
+        guard.gh = lambda path: {}
+        try:
+            import datetime
+            got = guard.load_waseem_prs("o/r", 30, now=datetime.datetime(2026, 10, 17, tzinfo=datetime.timezone.utc))
+        finally:
+            guard.pages, guard.gh = orig_pages, orig_gh
+        self.assertEqual([p["number"] for p in got], [383])
+        self.assertFalse([c for c in calls if "/pulls/620/" in c])
+
+    def test_helper_pr_with_a_huge_file_no_longer_blocks_a_pr(self):  # the #639 / #620 case
+        pr_files = [{"filename": "src/app-next.html", "changes": 5000}]  # API gave no patch, git fills it in; his list has only real PRs of his
+        pr_files[0]["patch"] = "-<div>old</div>\n+<div>new</div>"
+        self.assertTrue(decide(pr(639, "chart block"), pr_files, [], [STRIPE], [""])[0])
+
+
+def write(d, text):
+    with open(os.path.join(d, "wrangler.jsonc"), "w") as fh:
+        fh.write(text)
+
+
+class GitFallback(unittest.TestCase):
+    """Real git repos: a merge commit, a squash and a two-commit rebase must all show the Stripe flip."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        self.env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+        self.git("init", "-q", "-b", "main")
+        write(self.d, '{\n  "PAYMENT_DRIVER": "fake"\n}\n')
+        self.git("add", "-A")
+        self.git("commit", "-qm", "init")
+        self.base = self.git("rev-parse", "HEAD")
+        self._orig = guard.clone_for
+        guard.clone_for = lambda repo: self.d
+
+    def tearDown(self):
+        guard.clone_for = self._orig
+
+    def git(self, *a):
+        return subprocess.run(["git"] + list(a), cwd=self.d, env=self.env, check=True, capture_output=True, text=True).stdout.strip()
+
+    def feature(self):
+        """Two commits on a branch: the flip, then an unrelated file. Returns the branch tip."""
+        self.git("checkout", "-q", "-b", "feat")
+        write(self.d, '{\n  "PAYMENT_DRIVER": "stripe"\n}\n')
+        self.git("commit", "-qam", "flip")
+        with open(os.path.join(self.d, "other.txt"), "w") as fh:
+            fh.write("x\n")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "other")
+        tip = self.git("rev-parse", "HEAD")
+        self.git("checkout", "-q", "main")
+        return tip
+
+    def revert_patch(self, tip):
+        return "-  \"PAYMENT_DRIVER\": \"stripe\"\n+  \"PAYMENT_DRIVER\": \"fake\""
+
+    def check(self, tip):
+        patch = git_diff("o/r", self.base, tip, "wrangler.jsonc")
+        self.assertIn('+  "PAYMENT_DRIVER": "stripe"', patch)
+        his = {"number": 383, "title": "live", "shas": [tip], "files": [{"filename": "wrangler.jsonc", "patch": patch}]}
+        hits = config_overlap([{"filename": "wrangler.jsonc", "patch": self.revert_patch(tip)}], [his])
+        self.assertEqual({h["pr"] for h in hits}, {383})
+
+    def test_merge_commit_pr_shows_the_flip(self):
+        tip = self.feature()
+        self.git("merge", "--no-ff", "-q", "-m", "merge", "feat")
+        self.check(tip)
+
+    def test_squash_pr_shows_the_flip(self):
+        tip = self.feature()
+        self.git("merge", "--squash", "-q", "feat")
+        self.git("commit", "-qm", "squash")
+        self.check(tip)
+
+    def test_two_commit_rebase_pr_shows_the_flip(self):  # review 6 blocker 2: tip^1..tip would have seen only `other.txt`
+        tip = self.feature()
+        self.git("cherry-pick", "feat~1", "feat")
+        self.check(tip)
+
+    def test_unrelated_edit_passes_with_a_real_diff(self):
+        tip = self.feature()
+        patch = git_diff("o/r", self.base, tip, "wrangler.jsonc")
+        his = {"number": 383, "title": "live", "shas": [], "files": [{"filename": "wrangler.jsonc", "patch": patch}]}
+        self.assertEqual(config_overlap([{"filename": "wrangler.jsonc", "patch": '+  "OTHER_THING": "x"'}], [his]), [])
+
+    def test_git_that_cannot_say_fails_closed(self):
+        with self.assertRaises(Undecided):
+            git_diff("o/r", "0" * 40, "1" * 40, "wrangler.jsonc")
+
+    def test_empty_diff_for_a_changed_file_fails_closed(self):
+        with self.assertRaises(Undecided):
+            git_diff("o/r", self.base, self.base, "wrangler.jsonc")
 
 
 if __name__ == "__main__":
