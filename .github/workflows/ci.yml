@@ -50,7 +50,7 @@ jobs:
           "$RUNNER_TEMP/gitleaks" git --redact --no-banner --log-opts=HEAD
 
       - name: Lint, typecheck and script tests
-        run: scripts/check scripts/test-validation.py scripts/test-workflow-standards.py tier/test_classify.py
+        run: scripts/check scripts/test-validation.py scripts/test-workflow-standards.py tier/test_classify.py waseem-guard/test_guard.py
 
       - name: Semgrep rule tests and syntax
         run: |

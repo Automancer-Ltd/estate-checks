@@ -260,3 +260,7 @@ updates:
     commit-message:
       prefix: "chore(deps)"
 ```
+
+## waseem-guard (17 Oct 2026)
+
+`Automancer-Ltd/estate-checks/waseem-guard@v1` fails a pull request that reverts, disables or flips a setting (config files, ENV_STYLE flags) added by a PR Waseemilyas authored or merged in the last 30 days, unless the PR body or a comment says `Waseem-approved: <tracker card id>`. Add it as a job in the repo CI and list it in the `ci gate` needs. Same script runs locally: `python3 waseem-guard/guard.py check --repo ORG/REPO --pr N` (exit 1 refused, 2 undecided = fails closed). Limit: helpers share his GitHub identity, so a PR cannot prove who decided; the merge wrapper in chief-of-staff also verifies the card against the tracker.
