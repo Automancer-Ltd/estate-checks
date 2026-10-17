@@ -55,9 +55,9 @@ class Gate(unittest.TestCase):
         def hit(name, v="true"):
             w = {"number": 5, "title": "x", "shas": [], "files": [{"filename": "a.ts", "patch": "+export const %s = %s;" % (name, v)}]}
             return len(config_overlap([{"filename": "a.ts", "patch": "-export const %s = %s;" % (name, v)}], [w]))
-        for flag in ("stripeLive", "StripeLive", "LiveMode", "FeatureEnabled", "dry_run", "kill-switch"):
+        for flag in ("stripeLive", "StripeLive", "LiveMode", "FeatureEnabled", "dry_run", "kill-switch", "HTTPLive", "APIEnabled", "CIMode"):
             self.assertEqual(hit(flag), 1, flag)
-        for plain in ("model", "modern", "delivered", "threshold", "placeholder", "allowance", "retries"):
+        for plain in ("model", "modern", "delivered", "threshold", "placeholder", "allowance", "retries", "isOn", "isOff", "turnOn", "canRun", "shouldRun", "hasRun", "isDry", "toggle", "mySwitch", "run", "dry"):
             self.assertEqual(hit(plain), 0, plain)
 
     def test_plain_initialisers_and_yaml_collisions_are_routine(self):  # review 2 blocker 2

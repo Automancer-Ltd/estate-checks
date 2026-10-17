@@ -39,14 +39,16 @@ NOT_CONFIG = (r"(^|/)[^/]*lock[^/]*$", r"(^|/)\.github/workflows/", r"(^|/)(Carg
 # Outside config files a line is a flag when it is ENV_STYLE, or a name made of flag WORDS set to a boolean.
 # Words, not substrings: `model` and `delivered` are not `mode` and `live`.
 FLAG_WORDS = {"enable", "enabled", "disable", "disabled", "live", "flag", "flags", "feature", "mode", "driver", "allow", "allowed", "skip", "strict",
-              "debug", "stripe", "payment", "payments", "kill", "hold", "pause", "paused", "dryrun", "dry", "run", "switch", "toggle", "on", "off"}
+              "debug", "stripe", "payment", "payments", "kill", "hold", "pause", "paused", "dryrun", "killswitch"}
 BOOLLINE = re.compile(r"^(?:export\s+)?(?:(?:const|let|var)\s+)?[\"']?([A-Za-z_][\w.\-]*)[\"']?\s*[=:]\s*(?:true|false)\s*[,;]?$")
 ENVLINE = re.compile(r"^[\"']?[A-Z][A-Z0-9_]{2,}[\"']?\s*[=:]\s*\S")
 
 
 def key_words(key):
-    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", key)
-    return {w.lower() for w in re.split(r"[^A-Za-z0-9]+", spaced) if w}
+    spaced = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", key))  # HTTPLive -> HTTP Live
+    words = [w.lower() for w in re.split(r"[^A-Za-z0-9]+", spaced) if w]
+    pairs = {a + b for a, b in zip(words, words[1:])}  # dry_run -> dryrun, kill-switch -> killswitch
+    return set(words) | pairs
 
 
 def is_flag_key(key):
