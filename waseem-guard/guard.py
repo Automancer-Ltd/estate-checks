@@ -258,6 +258,18 @@ def pages(path, limit=MAX_PAGES, stop=None):
     raise Undecided("%s has more than %d pages; cannot be sure nothing was missed" % (path, limit))
 
 
+def pr_files(repo, pr):
+    # GitHub caps this endpoint at 3000 files; an empty page alone cannot prove completeness.
+    detail = pr if "changed_files" in pr else gh("repos/%s/pulls/%d" % (repo, pr["number"]))
+    expected = detail.get("changed_files")
+    if type(expected) is not int or expected < 0:
+        raise Undecided("PR %d has no reliable changed_files count" % pr["number"])
+    files = pages("repos/%s/pulls/%d/files" % (repo, pr["number"]), limit=31)
+    if len(files) != expected or len({f["filename"] for f in files}) != expected:
+        raise Undecided("PR %d lists %d files but reports %d changed files; cannot be sure nothing was missed" % (pr["number"], len(files), expected))
+    return files
+
+
 def load_waseem_prs(repo, days, now=None, wanted=()):
     since = (now or datetime.datetime.now(datetime.timezone.utc)) - datetime.timedelta(days=days)
 
@@ -275,7 +287,7 @@ def load_waseem_prs(repo, days, now=None, wanted=()):
             merged_by = (gh("repos/%s/pulls/%d" % (repo, p["number"])).get("merged_by") or {}).get("login")
         if WASEEM not in (by, merged_by) or not is_his(p["head"].get("ref"), p.get("body")):
             return None
-        files = pages("repos/%s/pulls/%d/files" % (repo, p["number"]))
+        files = pr_files(repo, p)
         for f in files:
             if f["filename"] in wanted and _nopatch(f):
                 f["patch"] = git_diff(repo, p["base"]["sha"], p["head"]["sha"], f["filename"], p["number"])
@@ -338,7 +350,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     try:
         pr = gh("repos/%s/pulls/%d" % (a.repo, a.pr))
-        files = pages("repos/%s/pulls/%d/files" % (a.repo, a.pr))
+        files = pr_files(a.repo, pr)
         commits = [c["commit"]["message"] for c in pages("repos/%s/pulls/%d/commits" % (a.repo, a.pr))]
         comments = [c.get("body", "") for c in pages("repos/%s/issues/%d/comments" % (a.repo, a.pr))]
         for f in files:
