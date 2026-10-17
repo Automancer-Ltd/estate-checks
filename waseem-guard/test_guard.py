@@ -44,6 +44,19 @@ class Gate(unittest.TestCase):
         with self.assertRaises(Undecided):
             decide(pr(401), [{"filename": "wrangler.jsonc", "changes": 900}], [], [STRIPE], [""])
 
+    def test_null_patch_on_either_side_is_undecided(self):  # review 2 blocker 3
+        with self.assertRaises(Undecided):
+            decide(pr(401), [{"filename": "wrangler.jsonc", "patch": None, "changes": 4}], [], [STRIPE], [""])
+        big = dict(STRIPE, files=[{"filename": "wrangler.jsonc", "changes": 9000}])
+        with self.assertRaises(Undecided):
+            decide(pr(401), REVERT_PATCH, [], [big], [""])
+
+    def test_plain_initialisers_and_yaml_collisions_are_routine(self):  # review 2 blocker 2
+        w = {"number": 5, "title": "x", "shas": [], "files": [{"filename": "a.ts", "patch": "+const retries = 0;\n+const index = 1;"},
+             {"filename": "docker-compose.yml", "patch": "+    name: web"}]}
+        self.assertEqual(config_overlap([{"filename": "a.ts", "patch": "-const retries = 0;\n-const index = 1;"},
+                                         {"filename": "docker-compose.yml", "patch": "+    name: worker"}], [w]), [])
+
     def test_lowercase_boolean_flag_in_source_is_a_flip(self):
         w = {"number": 5, "title": "flag", "shas": [], "files": [{"filename": "a.ts", "patch": "+export const stripeLive = true;"}]}
         self.assertEqual(len(config_overlap([{"filename": "a.ts", "patch": "-export const stripeLive = true;"}], [w])), 1)

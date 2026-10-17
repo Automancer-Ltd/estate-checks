@@ -36,8 +36,13 @@ CONFIG_BASENAMES = (r"wrangler[\w.\-]*\.jsonc?", r"\.env(\.[\w.\-]+)?", r"[\w.\-
                     r"[\w.\-]+\.service", r"[\w.\-]+\.timer")
 # Lockfiles, CI workflows and dependency manifests repeat lines everywhere; they are not settings.
 NOT_CONFIG = (r"(^|/)[^/]*lock[^/]*$", r"(^|/)\.github/workflows/", r"(^|/)(Cargo|pyproject)\.toml$", r"(^|/)pnpm-workspace\.yaml$")
-# Outside config files a line is a flag when it is ENV_STYLE or a name set to a boolean/null/0/1.
-FLAGLINE = re.compile(r"^(?:export\s+)?(?:(?:const|let|var)\s+)?[\"']?(?:[A-Z][A-Z0-9_]{2,}|[A-Za-z_][\w.\-]*)[\"']?\s*[=:]\s*(?:true|false|null|0|1)\s*[,;]?$|^[\"']?[A-Z][A-Z0-9_]{2,}[\"']?\s*[=:]\s*\S")
+# Outside config files a line is a flag when it is ENV_STYLE, or a flag-named identifier set to a boolean.
+HINT = r"(?:enabled?|disabled?|live|flags?|feature|mode|driver|allow\w*|skip\w*|strict|debug|stripe|payments?|kill|hold|paused?|dry_?run)"
+FLAGLINE = re.compile(r"^(?:export\s+)?(?:(?:const|let|var)\s+)?[\"']?(?:[A-Z][A-Z0-9_]{2,}|[A-Za-z_]*" + HINT + r"[A-Za-z_]*)[\"']?\s*[=:]\s*(?:true|false)\s*[,;]?$|^[\"']?[A-Z][A-Z0-9_]{2,}[\"']?\s*[=:]\s*\S")
+
+
+def is_flag_key(key):
+    return bool(re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", key) or re.search(HINT, key, re.I))
 KEYVAL = re.compile(r"^(?:export\s+)?(?:(?:const|let|var)\s+)?[\"']?([A-Za-z_][\w.\-]*)[\"']?\s*[=:]\s*(.+?)\s*,?$")
 APPROVAL = re.compile(r"Waseem-approved:\s*(?:https?://\S*/)?([dtnc]\d{1,6})\b", re.I)
 
@@ -72,14 +77,17 @@ def keyval(line):
     return (m.group(1), m.group(2).rstrip(",;")) if m else None
 
 
+def _nopatch(f):
+    return not f.get("patch") and f.get("changes", 1) > 0
+
+
 def config_overlap(pr_files, waseem_prs):
     """A setting he added that this PR deletes (removed line) or overrides (the same key set to another value)."""
     hits = []
     for pf in pr_files:
-        if "patch" not in pf and not pf.get("changes") == 0:
-            for wp in waseem_prs:
-                if any(wf.get("filename") in (pf.get("filename"), pf.get("previous_filename")) for wf in wp.get("files", [])):
-                    raise Undecided("no patch for %s (too large or binary) and it was changed by his #%d" % (pf.get("filename"), wp["number"]))
+        touched_by = [wp for wp in waseem_prs for wf in wp.get("files", []) if wf.get("filename") in (pf.get("filename"), pf.get("previous_filename"))]
+        if touched_by and (_nopatch(pf) or any(_nopatch(wf) for wp in touched_by for wf in wp.get("files", []) if wf.get("filename") in (pf.get("filename"), pf.get("previous_filename")))):
+            raise Undecided("no patch for %s (too large or binary) and his #%d changed it too" % (pf.get("filename"), touched_by[0]["number"]))
         removed = [x for x in patch_lines(pf.get("patch"), "-") if substantive(x)]
         added_here = [x for x in patch_lines(pf.get("patch"), "+") if substantive(x)]
         if not removed and not added_here:
@@ -97,11 +105,11 @@ def config_overlap(pr_files, waseem_prs):
                 his_kv = {}
                 for line in hers:
                     kv = keyval(line)
-                    if kv and (flaggy or FLAGLINE.match(line)):
+                    if kv and is_flag_key(kv[0]) and (flaggy or FLAGLINE.match(line)):
                         his_kv[kv[0]] = kv[1]
                 for line in added_here:
                     kv = keyval(line)
-                    if kv and kv[0] in his_kv and kv[1] != his_kv[kv[0]] and (flaggy or FLAGLINE.match(line)):
+                    if kv and kv[0] in his_kv and kv[1] != his_kv[kv[0]] and is_flag_key(kv[0]):
                         hits.append({"file": pf["filename"], "line": line[:120], "pr": wp["number"], "title": wp.get("title", ""), "how": "overrides his %s" % kv[0]})
     return hits
 
