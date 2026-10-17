@@ -260,3 +260,7 @@ updates:
     commit-message:
       prefix: "chore(deps)"
 ```
+
+## waseem-guard (17 Oct 2026)
+
+`Automancer-Ltd/estate-checks/waseem-guard@v1` fails a pull request that reverts, or deletes or overrides a setting (config files, flag-shaped lines) added by a PR Waseemilyas authored or merged in the last 30 days. The only way through is a line in `waseem-guard/approvals.tsv` (card id, repo, PR or `*`, date, his answer), added after he approves the card, plus `Waseem-approved: <card id>` in the PR body. A bare marker never approves. Anything it cannot establish (truncated file or PR lists, a missing patch, an unreadable ledger) exits 2 and fails the check. Add it as a job in the repo CI and list it in the `ci gate` needs. Locally: `python3 waseem-guard/guard.py check --repo ORG/REPO --pr N`. Limit: helpers share his GitHub identity, so authorship cannot tell his decisions from a helper's; the ledger commit is the control.
