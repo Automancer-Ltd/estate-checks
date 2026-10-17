@@ -130,6 +130,39 @@ class Completeness(unittest.TestCase):
         finally:
             guard.gh = orig
 
+    def test_large_historical_pr_is_read_completely_and_api_truncation_is_refused(self):
+        import datetime
+        from urllib.parse import parse_qs, urlsplit
+        merged = "2026-10-16T10:00:00Z"
+        closed = {"number": 41, "title": "Import", "merged_at": merged, "updated_at": merged,
+                  "user": {"login": "Waseemilyas"}, "body": "", "head": {"ref": "main", "sha": "a"},
+                  "merge_commit_sha": "b"}
+        original = guard.gh
+        try:
+            for count in (2896, 3000, 3001):
+                with self.subTest(changed_files=count):
+                    files = [{"filename": "file-%d.conf" % i, "patch": "+SETTING=live", "changes": 1} for i in range(min(count, 3000))]
+
+                    def api(path):
+                        if "/files?" in path:
+                            page = int(parse_qs(urlsplit(path).query)["page"][0])
+                            return files[(page - 1) * 100:page * 100]
+                        if "state=closed" in path:
+                            return [closed]
+                        if path.endswith("/pulls/41"):
+                            return {**closed, "changed_files": count}
+                        raise AssertionError(path)
+                    guard.gh = api
+                    if count > 3000:
+                        with self.assertRaises(Undecided):
+                            guard.load_waseem_prs("o/r", 30, now=datetime.datetime(2026, 10, 17, tzinfo=datetime.timezone.utc))
+                    else:
+                        result = guard.load_waseem_prs("o/r", 30, now=datetime.datetime(2026, 10, 17, tzinfo=datetime.timezone.utc))
+                        self.assertEqual(len(result[0]["files"]), count)
+                        self.assertEqual(result[0]["files"][-1]["filename"], "file-%d.conf" % (count - 1))
+        finally:
+            guard.gh = original
+
 
 class HisOrHelper(unittest.TestCase):
     def test_branch_and_body_tell_his_from_a_helper(self):  # Waseem 17 Oct: #620 s1289/... is a helper PR
@@ -152,7 +185,7 @@ class HisOrHelper(unittest.TestCase):
             calls.append(path)
             return closed if "state=closed" in path else [{"filename": "wrangler.jsonc", "patch": "+x", "changes": 1}]
         guard.pages = fake_pages
-        guard.gh = lambda path: {}
+        guard.gh = lambda path: {"changed_files": 1}
         try:
             import datetime
             got = guard.load_waseem_prs("o/r", 30, now=datetime.datetime(2026, 10, 17, tzinfo=datetime.timezone.utc))
