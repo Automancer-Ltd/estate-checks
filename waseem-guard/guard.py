@@ -66,7 +66,8 @@ APPROVAL = re.compile(r"Waseem-approved:\s*(?:https?://\S*/)?([dtnc]\d{1,6})\b",
 
 # A PR is HIS only if it was not made by a helper. Every helper pushes under his gh login, so author/merger prove nothing;
 # the branch prefix and the body say who really did the work (Waseem 17 Oct 2026: #620 `s1289/...` is a helper PR).
-HELPER_BRANCH = re.compile(r"^(?:s\d+|ln-\w+|lane|lanes|devin|shape|codex|claude|muse|grok|kimi|cursor|opencode|copilot|agent|agents|helper|bot|dependabot|renovate|fix|withdrawn|chair|gandalf|cos)(?:[/_\-]|$)", re.I)
+HELPER_BRANCH = re.compile(r"^(?:s\d+|ln-\w+|lanes?|bb|st\d+(?:-p\d+)?|plan|devin|shape|codex|claude|muse|grok|kimi|cursor|opencode|copilot|agents?|helper|bot|dependabot|renovate|fix|withdrawn|chair|gandalf|cos)(?:[/_\-]|$)"
+                           r"|(?:^|/)lane[-_/]|thr_\w+", re.I)
 # Body markers are only the explicit "this was a helper's" kind. `Generated with Claude Code` is NOT one: his own interactive
 # bb lane writes it too (#383, the Stripe go-live he ordered, carries it), so it would hide exactly the PRs to protect.
 HELPER_BODY = re.compile(r"\bhelper s\d+\b|\blane ln-\w+|\bopened by (?:a )?(?:helper|lane|agent)\b", re.I)
@@ -275,10 +276,9 @@ def load_waseem_prs(repo, days, now=None, wanted=()):
         if WASEEM not in (by, merged_by) or not is_his(p["head"].get("ref"), p.get("body")):
             return None
         files = pages("repos/%s/pulls/%d/files" % (repo, p["number"]))
-        diff_sha = p.get("merge_commit_sha")
         for f in files:
-            if f["filename"] in wanted and _nopatch(f) and diff_sha:
-                f["patch"] = git_diff(repo, diff_sha + "^1", diff_sha, f["filename"])
+            if f["filename"] in wanted and _nopatch(f):
+                f["patch"] = git_diff(repo, p["base"]["sha"], p["head"]["sha"], f["filename"], p["number"])
         return {"number": p["number"], "title": p.get("title", ""),
                 "shas": [s for s in (p.get("merge_commit_sha"), p["head"]["sha"]) if s], "files": files}
     with ThreadPoolExecutor(max_workers=8) as ex:
@@ -306,16 +306,22 @@ def clone_for(repo):
     return _CLONES[repo]
 
 
-def git_diff(repo, base, head, filename):
-    """The real diff of one file, from git, when the REST API gives no patch (too large). Fails closed if git cannot say."""
+def git_diff(repo, base, head, filename, pr_number=None):
+    """The PR's own diff of one file, from git, when the REST API gives no patch (too large). `base...head` is what the PR
+    changed whatever the merge strategy (merge commit, squash or rebase), unlike a range around the merge commit.
+    Fails closed if git cannot say, and an empty answer for a file the API says changed is also "cannot say"."""
     d = clone_for(repo)
+    if pr_number is not None:
+        _git(["fetch", "-q", "origin", "+refs/pull/%d/head:refs/pull/%d/head" % (pr_number, pr_number)], cwd=d)
     for ref in (base, head):
-        if _git(["cat-file", "-e", ref.split("^")[0] + "^{commit}"], cwd=d).returncode != 0:
-            _git(["fetch", "-q", "origin", ref.split("^")[0]], cwd=d)
-    r = _git(["diff", "--no-color", "-U0", "%s...%s" % (base, head) if "^" not in base else "%s..%s" % (base, head), "--", filename], cwd=d)
+        if _git(["cat-file", "-e", ref + "^{commit}"], cwd=d).returncode != 0:
+            _git(["fetch", "-q", "origin", ref], cwd=d)
+    r = _git(["diff", "--no-color", "-U0", "%s...%s" % (base, head), "--", filename], cwd=d)
     if r.returncode != 0:
-        raise Undecided("git diff %s..%s -- %s failed: %s" % (base[:10], head[:10], filename, r.stderr.strip()[:160]))
-    return r.stdout or " "
+        raise Undecided("git diff %s...%s -- %s failed: %s" % (base[:10], head[:10], filename, r.stderr.strip()[:160]))
+    if not r.stdout.strip():
+        raise Undecided("git gave an empty diff for %s although GitHub says it changed" % filename)
+    return r.stdout
 
 
 def read_ledger():
@@ -337,7 +343,7 @@ def main(argv=None):
         comments = [c.get("body", "") for c in pages("repos/%s/issues/%d/comments" % (a.repo, a.pr))]
         for f in files:
             if _nopatch(f):
-                f["patch"] = git_diff(a.repo, pr["base"]["sha"], pr["head"]["sha"], f["filename"])
+                f["patch"] = git_diff(a.repo, pr["base"]["sha"], pr["head"]["sha"], f["filename"], a.pr)
         wprs = load_waseem_prs(a.repo, a.window_days, wanted={f["filename"] for f in files})
         texts = [pr.get("body", ""), pr.get("title", "")] + comments
         ledger = None
