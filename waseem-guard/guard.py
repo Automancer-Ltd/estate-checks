@@ -265,8 +265,15 @@ def pr_files(repo, pr):
     if type(expected) is not int or expected < 0:
         raise Undecided("PR %d has no reliable changed_files count" % pr["number"])
     files = pages("repos/%s/pulls/%d/files" % (repo, pr["number"]), limit=31)
-    if len(files) != expected or len({f["filename"] for f in files}) != expected:
-        raise Undecided("PR %d lists %d files but reports %d changed files; cannot be sure nothing was missed" % (pr["number"], len(files), expected))
+    # A path replaced by another kind (file<->symlink/dir) is listed twice, once removed and once added, but counted once
+    # in changed_files. Only that exact pair may repeat; any other repeat still fails closed.
+    seen = {}
+    for f in files:
+        seen.setdefault(f["filename"], []).append(f.get("status"))
+    if any(len(v) > 1 and not (len(v) == 2 and sorted(v) == ["added", "removed"]) for v in seen.values()):
+        raise Undecided("PR %d lists a path more than once and not as removed+added; cannot be sure nothing was missed" % pr["number"])
+    if len(seen) != expected:
+        raise Undecided("PR %d lists %d files but reports %d changed files; cannot be sure nothing was missed" % (pr["number"], len(seen), expected))
     return files
 
 
