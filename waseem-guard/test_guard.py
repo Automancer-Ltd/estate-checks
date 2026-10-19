@@ -279,5 +279,29 @@ class GitFallback(unittest.TestCase):
             git_diff("o/r", self.base, self.base, "wrangler.jsonc")
 
 
+class PrFilesTypeChange(unittest.TestCase):
+    def _run(self, files, expected):
+        import guard
+        orig = guard.pages
+        guard.pages = lambda *a, **k: files
+        try:
+            return guard.pr_files("o/r", {"number": 476, "changed_files": expected})
+        finally:
+            guard.pages = orig
+
+    def test_removed_plus_added_same_path_counts_once(self):  # ops #476: AGENTS.md replaced, 101 entries, 100 changed
+        files = [{"filename": "AGENTS.md", "status": "removed"}, {"filename": "AGENTS.md", "status": "added"}, {"filename": "a", "status": "modified"}]
+        self.assertEqual(len(self._run(files, 2)), 3)
+
+    def test_other_duplicates_still_fail_closed(self):
+        files = [{"filename": "a", "status": "modified"}, {"filename": "a", "status": "modified"}]
+        with self.assertRaises(Undecided):
+            self._run(files, 1)
+
+    def test_missing_file_still_fails_closed(self):
+        with self.assertRaises(Undecided):
+            self._run([{"filename": "a", "status": "modified"}], 2)
+
+
 if __name__ == "__main__":
     unittest.main()
