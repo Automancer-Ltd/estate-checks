@@ -7,6 +7,12 @@ SCRIPT="$ROOT/scripts/install-semgrep.sh"
 t="$(mktemp -d)"; trap 'rm -rf "$t"' EXIT
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
+# The real installer path gets the pinned version (a stub uv on PATH records its arguments).
+mkdir -p "$t/bin"
+printf '#!/bin/sh\necho "$@" >"%s/uv.args"\n' "$t" >"$t/bin/uv"; chmod +x "$t/bin/uv"
+PATH="$t/bin:$PATH" "$SCRIPT" 9.9.9 >/dev/null 2>&1 || fail "stub uv install failed"
+grep -q "semgrep==9.9.9" "$t/uv.args" || fail "version not passed to the installer: $(cat "$t/uv.args")"
+
 # A working install succeeds on the first attempt.
 SEMGREP_INSTALL_COMMAND='true' "$SCRIPT" 9.9.9 >"$t/ok" 2>&1 || fail "a good install was refused"
 grep -q "attempt 1)" "$t/ok" || fail "success not reported"
