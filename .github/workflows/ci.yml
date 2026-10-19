@@ -52,6 +52,9 @@ jobs:
       - name: Lint, typecheck and script tests
         run: scripts/check scripts/test-validation.py scripts/test-workflow-standards.py tier/test_classify.py waseem-guard/test_guard.py
 
+      - name: Bounded Semgrep install test
+        run: scripts/test-install-semgrep.sh
+
       - name: Semgrep rule tests and syntax
         run: |
           set -euo pipefail
