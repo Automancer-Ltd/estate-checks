@@ -40,15 +40,21 @@ jobs:
           bash "$RUNNER_TEMP/download-actionlint.bash" 1.7.12 "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Install gitleaks
+        timeout-minutes: 3
+        env:
+          GITLEAKS_VERSION: 8.30.1
+        run: |
+          set -euo pipefail
+          # Bounded per attempt, digest-pinned and retried, so a stalled or truncated transfer
+          # retries here instead of reddening Check (19 Oct 2026, gdp-maia run 39339817582
+          # stalled at 3.7 MB of 8.2 MB, and the scan then read a truncated archive).
+          scripts/fetch-gitleaks.sh "$GITLEAKS_VERSION" "$RUNNER_TEMP"
+          "$RUNNER_TEMP/gitleaks" version
       - name: Scan commit for secrets
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error --location --max-time 30 \
-            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
-            -o "$RUNNER_TEMP/gitleaks.tar.gz"
-          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
           "$RUNNER_TEMP/gitleaks" git --redact --no-banner --log-opts=HEAD
-
       - name: Lint, typecheck and script tests
         run: scripts/check scripts/test-validation.py scripts/test-workflow-standards.py tier/test_classify.py waseem-guard/test_guard.py
 
