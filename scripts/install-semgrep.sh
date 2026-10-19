@@ -14,6 +14,8 @@ version="${1:?usage: install-semgrep.sh <version>}"
 attempts="${SEMGREP_INSTALL_ATTEMPTS:-3}"
 attempt_seconds="${SEMGREP_INSTALL_TIMEOUT:-120}"
 
+# The attempt runs in a child bash, so it needs the version in its environment.
+export version
 export UV_HTTP_TIMEOUT=30
 export PIP_DEFAULT_TIMEOUT=15 PIP_RETRIES=1
 
