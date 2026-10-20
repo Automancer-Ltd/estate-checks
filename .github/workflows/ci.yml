@@ -79,6 +79,12 @@ jobs:
           include-hidden-files: true
           retention-days: 14
 
+      # Disposable consumer proof (README Release Process step 2): the
+      # candidate action, downloaded by SHA, must fail this job on the
+      # unbounded install in install-fixture.yml and pass once bounded.
+      - name: Run candidate action
+        uses: Automancer-Ltd/estate-checks@15b8d8831f33833a7ab88f3c4cfe49227050d489
+
       - name: Warn mode — unresolvable baseline warns and does not fail
         id: test-warn
         if: github.event_name == 'pull_request'
@@ -109,12 +115,6 @@ jobs:
             exit 1
           fi
           echo "Warn mode warns; strict mode fails."
-
-      # Disposable consumer proof (README Release Process step 2): the
-      # candidate action, downloaded by SHA, must fail this job on the
-      # unbounded install in install-fixture.yml and pass once bounded.
-      - name: Run candidate action
-        uses: Automancer-Ltd/estate-checks@15b8d8831f33833a7ab88f3c4cfe49227050d489
 
       - name: Run local action
         uses: ./
