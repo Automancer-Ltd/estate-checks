@@ -18,6 +18,8 @@ steps against a synthetic PR file API and committed checkout.
   return `standard`, including an otherwise small or documentation-only change.
 - `tested-push`: identical recorded and pushed Git trees return `none`.
 - `merge-skew`: different trees require work; its large diff returns `standard`.
+- `db-test`: a one-line change to `workers/test_cost_postgres.py` returns
+  `standard`, because a quick job may let database tests skip (t4647).
 - `api-failure` and `dispatch`: API errors and manual events return `standard`.
 
 Proof: the public outputs in `results.json`. Gotcha: the consumer chooses the
