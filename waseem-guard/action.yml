@@ -1,21 +1,8 @@
-name: 'Waseem guard'
-description: 'Refuse a PR that reverts, disables or flips config/flags set by Waseem in the last 30 days, unless it carries a Waseem-approved tracker id'
-inputs:
-  window-days:
-    description: 'Days of his merged PRs to protect'
-    required: false
-    default: '30'
+name: "Waseem guard (removed)"
+description: "Removed on Waseem's order, 20 Oct 2026. Kept as a no-op so old branches that still call it pass; drop the job from your CI."
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
-    - name: Waseem guard
+    - name: Waseem guard (removed)
       shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
-        REPO: ${{ github.repository }}
-        PR: ${{ github.event.pull_request.number }}
-        DAYS: ${{ inputs.window-days }}
-      run: |
-        set -euo pipefail
-        if [ -z "${PR:-}" ]; then echo "waseem-guard: not a pull request, nothing to check"; exit 0; fi
-        python3 "${{ github.action_path }}/guard.py" check --repo "$REPO" --pr "$PR" --window-days "$DAYS"
+      run: echo "waseem-guard was removed on 20 Oct 2026 (Waseem); this step does nothing. Remove the job from this workflow."
