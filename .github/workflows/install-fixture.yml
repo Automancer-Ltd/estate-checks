@@ -1,0 +1,19 @@
+name: Install timeout fixture
+
+# Disposable consumer proof for the t4456 release (README "Release Process"
+# step 2). workflow_dispatch only: this workflow never runs; it exists so the
+# estate-checks action can read it. Commit 1 carries the unbounded install the
+# gate must catch; commit 2 bounds it and the run must go green.
+on: workflow_dispatch
+
+permissions:
+  contents: read
+
+jobs:
+  install-something:
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}
+    steps:
+      - name: Install a tiny package
+        run: |
+          set -euo pipefail
+          pip install --quiet six
