@@ -66,6 +66,19 @@ DEFAULT_FULL = [
     "**/convex.json", "**/vercel.json", "**/wrangler.toml", "**/wrangler.json*",
     "**/netlify.toml", "**/render.yaml", "**/fly.toml",
 ]
+# Database tests and their harness. A consumer's quick job runs named tests with
+# database tests allowed to skip (gdp-knowledge-graph sets
+# KG_ALLOW_POSTGRES_TEST_SKIPS=1), so a change to one passed without running it:
+# KG PR #646 (d093467) changed workers/test_document_coverage_postgres.py, merged
+# green on core and reddened master until #655 (t4647, 20 Oct 2026). Only the
+# full suite runs them, so any such path selects it.
+DEFAULT_DB_TESTS = [
+    "**/*postgres*", "**/*_pg.*", "**/*.pg.*", "**/test_pg_*", "**/pg_test*",
+    "**/*_db_test.*", "**/*.db.test.*", "**/*.db.spec.*", "**/test_db_*", "**/test_*_db.*",
+    "**/*database*test*", "**/*test*database*",
+    "**/db/test/**", "**/db/tests/**", "**/db/__tests__/**", "**/tests/db/**", "**/test/db/**",
+    "**/tests/postgres/**", "**/tests/database/**", "**/db-tests/**", "**/db_tests/**",
+]
 # Names too common to mean "this file" when they appear in code.
 GENERIC_DOC_NAMES = {
     "readme.md", "changelog.md", "license.md", "contributing.md", "security.md",
@@ -180,10 +193,14 @@ def classify(files: list[ChangedFile], cfg: Config, labels: Iterable[str] = (),
     if not files:
         return STANDARD, "no changed files reported"
     full = [glob_to_regex(p) for p in cfg.full]
+    db_tests = [glob_to_regex(p) for p in DEFAULT_DB_TESTS]
     for f in files:
         hit = next((p for p in _paths(f) if _matches(p, full)), None)
         if hit:
             return STANDARD, f"{hit} always needs the full suite"
+        hit = next((p for p in _paths(f) if not p.endswith(DOC_SUFFIXES) and _matches(p, db_tests)), None)
+        if hit:
+            return STANDARD, f"{hit} is a database test or its harness; only the full suite runs database tests"
 
     docs = set(doc_candidates(files, cfg)) - set(read_docs)
     code = [f for f in files if not all(p in docs for p in _paths(f))]
