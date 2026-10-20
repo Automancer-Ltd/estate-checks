@@ -141,6 +141,8 @@ def verify(evidence: Path) -> None:
                  "convex/auth.ts", 1, {}, [], "standard", []),
                 ("large", common, "src/cost.ts", 51, {}, [], "standard", []),
                 ("full-path", common, "src/cost.ts", 1, {"full-paths": "src/**"}, [], "standard", []),
+                ("db-test", {"workers/test_cost_postgres.py": "def test_cost():\n    pass\n"},
+                 "workers/test_cost_postgres.py", 1, {}, [], "standard", []),
                 ("full-label", {"docs/guide.md": "Guide\n"}, "docs/guide.md", 1, {},
                  [{"name": "ci:full"}], "standard", []),
                 ("agent-skill-markdown", {
