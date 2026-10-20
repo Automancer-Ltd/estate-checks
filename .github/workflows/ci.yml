@@ -83,7 +83,7 @@ jobs:
       # candidate action, downloaded by SHA, must fail this job on the
       # unbounded install in install-fixture.yml and pass once bounded.
       - name: Run candidate action
-        uses: Automancer-Ltd/estate-checks@15b8d8831f33833a7ab88f3c4cfe49227050d489
+        uses: Automancer-Ltd/estate-checks@v1
 
       - name: Warn mode — unresolvable baseline warns and does not fail
         id: test-warn
