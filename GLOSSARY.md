@@ -9,6 +9,11 @@ Shared checks and test selection for repositories on the Automancer estate.
 **Scanner**: A check that reports unbounded outside calls or workflow-standard
 warnings in a consumer. A finding warns by default.
 
+**Install gate**: The install-timeout check, which fails a consumer's run when
+a workflow step installs packages with no `timeout-minutes` on the step or its
+job. Its findings never warn: the failure it prevents is a red, unlanded
+release PR.
+
 **Tier**: The amount of CI a change requires: `none` skips work already proved or
 unneeded; `core` runs quick checks and direct tests; `standard` runs the full suite.
 _Avoid_: quick tier, full tier (the output values are `core` and `standard`).

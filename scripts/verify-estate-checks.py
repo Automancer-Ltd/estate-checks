@@ -56,6 +56,7 @@ def action(manifest: Path, work: Path, evidence: Path, env: dict[str, str],
                    "github.event_name": env["GITHUB_EVENT_NAME"],
                    "github.event_path": env["GITHUB_EVENT_PATH"],
                    "github.repository_owner": "Automancer-Ltd",
+                   "github.repository": env.get("GITHUB_REPOSITORY", REPO),
                    "github.event.repository.default_branch": "main"})
 
     def resolve(expression: str) -> str:
@@ -260,6 +261,44 @@ def verify(evidence: Path) -> None:
                                      "shell-curl-no-timeout", "workflow-curl-no-timeout"):
                             assert rule in logs, (rule, logs)
                 results.append({"journey": name, "exit": code, "outputs": outputs})
+
+            # Install-timeout gate (tracker t4456): an unbounded package install
+            # fails the run by default; a bounded one passes; the opt-out skips.
+            install_workflow = ("on: pull_request\nconcurrency: ci\njobs:\n  check:\n"
+                                "    runs-on: ${{ fromJSON(vars.CI_RUNNER) }}\n    steps:\n"
+                                "      - name: Install tools\n")
+            bounded_step = "        timeout-minutes: 3\n"
+            install_step = ("        run: |\n          set -euo pipefail\n"
+                            "          pip install --quiet requests\n          npm ci\n")
+            for name, bounded, skip in [("install-unbounded", False, False),
+                                        ("install-bounded", True, False),
+                                        ("install-skip", False, True)]:
+                dest = evidence / name
+                dest.mkdir()
+                work = scratch / name
+                step = bounded_step + install_step if bounded else install_step
+                files = {"src/cost.ts": "export const cost = 1;\n",
+                         ".github/workflows/ci.yml": install_workflow + step}
+                base = fixture(work, files)
+                event = dest / "event.json"
+                event.write_text(json.dumps({"pull_request": {"base": {"sha": base}}}))
+                env = {**os.environ, "GITHUB_EVENT_NAME": "pull_request", "GITHUB_EVENT_PATH": str(event),
+                       "GITHUB_WORKSPACE": str(work), "RUNNER_TEMP": str(dest),
+                       "GITHUB_STEP_SUMMARY": str(dest / "summary.md"),
+                       "SEMGREP_SEND_METRICS": "off", "SEMGREP_ENABLE_VERSION_CHECK": "0"}
+                inputs = {"check-installs": "false"} if skip else {}
+                code, outputs = action(ROOT / "action.yml", work, dest, env, inputs)
+                logs = "\n".join(p.read_text() for p in dest.glob("*-log.txt"))
+                if name == "install-unbounded":
+                    assert code != 0, logs
+                    assert "installs packages with no timeout" in logs, logs
+                    assert "install-timeout-count=2" in logs, logs
+                else:
+                    assert code == 0, logs
+                    assert int(outputs["install-timeout-count"]) == 0, outputs
+                    if skip:
+                        assert "Install timeout check skipped" in logs, logs
+                results.append({"journey": name, "exit": code, "outputs": outputs})
     finally:
         server.shutdown()
         server.server_close()
@@ -286,7 +325,8 @@ def main() -> None:
         "semgrep": actual,
         "sha256": {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
                    for p in [ROOT / "action.yml", ROOT / "tier/action.yml", ROOT / "tier/classify.py",
-                             ROOT / "scripts/generate-summary.py", ROOT / "scripts/workflow-standards.py"]},
+                             ROOT / "scripts/generate-summary.py", ROOT / "scripts/workflow-standards.py",
+                             ROOT / "scripts/install-timeouts.py"]},
     }, indent=2) + "\n")
     verify(evidence)
 

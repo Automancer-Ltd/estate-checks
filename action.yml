@@ -29,6 +29,10 @@ inputs:
     description: 'Warn about ci-standards workflow rules in this repository''s workflows (job timeout-minutes, workflow concurrency group, push filtered to the default branch, runs-on from vars.CI_RUNNER, no schedule trigger). Set to "false" to skip that check. Warning only, never failing.'
     required: false
     default: 'true'
+  check-installs:
+    description: 'Fail the run when a workflow step installs packages (pip install, uv pip install, npm ci/npm install, apt-get install, go install) with no timeout-minutes on the step or its job. Deliberate exceptions are rows in install-timeout-allowlist.tsv in this repository. Set to "false" to skip that check.'
+    required: false
+    default: 'true'
 outputs:
   findings-count:
     description: 'Total number of reported findings'
@@ -36,6 +40,9 @@ outputs:
   workflow-warnings-count:
     description: 'Number of ci-standards workflow warnings in this repository''s workflows, including a schedule trigger (0 when the workflow check is skipped)'
     value: ${{ steps.workflow-standards.outputs.warnings_count }}
+  install-timeout-count:
+    description: 'Number of workflow steps that install packages with no timeout-minutes on the step or its job (0 when the install check is skipped)'
+    value: ${{ steps.install-timeouts.outputs.count }}
 
 runs:
   using: 'composite'
@@ -247,3 +254,45 @@ runs:
 
         echo "Workflow standards check completed successfully."
         exit 0
+
+    - name: Run Install Timeout Check
+      id: install-timeouts
+      shell: bash
+      env:
+        INPUT_CHECK_INSTALLS: ${{ inputs.check-installs }}
+        ACTION_PATH: ${{ github.action_path }}
+        REPOSITORY: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+
+        echo "count=0" >> "$GITHUB_OUTPUT"
+
+        if [ "${INPUT_CHECK_INSTALLS:-true}" != "true" ]; then
+          echo "Install timeout check skipped (check-installs: false)."
+          exit 0
+        fi
+
+        # PyYAML ships with the hosted runner images, but a missing copy must not
+        # turn into a silent pass: install it once, and if that fails the check
+        # itself reports that it could not run and fails (it is a gate).
+        if ! python3 -c 'import yaml' >/dev/null 2>&1; then
+          python3 -m pip install --quiet --break-system-packages 'pyyaml>=6,<7' >/dev/null 2>&1 || true
+        fi
+
+        # Unlike the two checks above this one fails the run (tracker t4456): an
+        # unbounded install once held the automancer-ops release check until the
+        # job was killed 4m38s in (19 Oct 2026, run 39332563829), so catching it
+        # in the PR that introduces it is the point. Exceptions are allowlist rows.
+        RC=0
+        OUTPUT="$(python3 "$ACTION_PATH/scripts/install-timeouts.py" \
+          --root "$GITHUB_WORKSPACE" \
+          --repository "$REPOSITORY")" || RC=$?
+        printf '%s\n' "$OUTPUT"
+
+        COUNT="$(printf '%s\n' "$OUTPUT" | sed -n 's/^install-timeout-count=//p' | tail -1)"
+        echo "count=${COUNT:-0}" >> "$GITHUB_OUTPUT"
+
+        if [ "$RC" -ne 0 ]; then
+          echo "::error title=Install timeouts::the install-timeout check failed this run — see the annotations and job summary."
+        fi
+        exit "$RC"

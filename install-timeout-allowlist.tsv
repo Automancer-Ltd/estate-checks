@@ -1,0 +1,14 @@
+# Deliberate exceptions to the install-timeout check (tracker t4456).
+#
+# One row per job that may run a package install with no timeout-minutes on
+# the step or the job, with the reason it is deliberate:
+#
+#   repo<TAB>workflow path<TAB>job id<TAB>reason
+#
+# repo is `owner/name` (case-insensitive), the workflow path is relative to
+# the repository root, and `*` wildcards any field. A row without a reason,
+# or with the wrong column count, fails the check rather than passing
+# silently. A comment inside the caller's workflow does not silence anything;
+# this file is the only exception path, so every exception is visible here.
+#
+# Empty: no estate workflow currently needs an unbounded install.

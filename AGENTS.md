@@ -1,7 +1,8 @@
 # Estate Checks
 
-Two consumer surfaces: `action.yml` warns about unbounded calls and workflow
-standards; `tier/action.yml` decides how much CI a change needs. Terms:
+Three consumer surfaces: `action.yml` warns about unbounded calls and workflow
+standards, and fails a run whose workflow steps install packages with no
+timeout; `tier/action.yml` decides how much CI a change needs. Terms:
 [GLOSSARY.md](GLOSSARY.md). Behaviour contract: [SPEC.md](SPEC.md).
 
 ## Work and check
@@ -28,7 +29,9 @@ No generated code or build is needed for symbol navigation.
   `docs-include` names one non-runtime directory as documentation; product
   markdown stays excluded (`tier/classify.py:doc_candidates`).
 - Scanner annotations/counts: `scripts/generate-summary.py`; workflow warnings:
-  `scripts/workflow-standards.py`. Rules and positive/negative fixtures: `rules/`.
+  `scripts/workflow-standards.py`; the blocking install gate:
+  `scripts/install-timeouts.py` (exceptions in `install-timeout-allowlist.tsv`).
+  Rules and positive/negative fixtures: `rules/`.
 
 ## Release
 

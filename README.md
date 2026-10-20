@@ -1,6 +1,6 @@
 # Automancer Estate Checks
 
-Last verified: 2026-10-16 on automancer-vps
+Last verified: 2026-10-20 on automancer-vps
 
 Shared mechanical CI checks for the Automancer estate, centralized in a single repository and invoked by version tag across all estate projects.
 
@@ -9,6 +9,8 @@ The check inspects code for **unbounded outside network and subprocess calls**�
 The repository also ships [`tier`](tier/README.md), a second action that decides how much CI a change needs (none, core or standard) so docs-only changes and already-tested merges skip the suite.
 
 The same action runs a second, pure-Python check: **workflow standards**, the mechanical rules 1-4 of the `ci-standards` skill plus rule 3's ban on a `schedule` trigger, read from this repository's own `.github/workflows` and reported as inline annotations. See [Workflow standards](#workflow-standards-ci-standards-rules-1-4).
+
+It runs a third check, **install timeouts**: a workflow step that installs packages must declare `timeout-minutes` on the step or its job, and an unbounded install fails the run. See [Install timeouts](#install-timeouts-workflow-steps-that-install-packages).
 
 ---
 
@@ -110,6 +112,82 @@ that must not, so the check is proven to discriminate rather than to exist.
 
 ---
 
+## Install timeouts (workflow steps that install packages)
+
+A package install is the one CI step that talks to an index for minutes on end, so an install with
+no time limit is the one step that can hold a job until GitHub cancels it. The automancer-ops
+release check died exactly there on 19 Oct 2026 (run 39332563829, job 118334064821): killed 4m38s
+in while a `pip` install was still running, the release PR red and unlanded. The estate had
+already bounded its own installs (semgrep in #38, the gitleaks download in #40, pi-harness in #52)
+— but nothing stopped the *next* repository adding an unbounded one.
+
+This check reads the caller repository's `.github/workflows/*.yml` and **fails the run** when a
+`run:` step executes a package install — `pip install` (including `pip3` and `python -m pip`),
+`uv pip install`, `npm ci`/`npm install`, `apt-get install`/`apt install` or `go install` — while
+neither the step nor its job declares `timeout-minutes`:
+
+| Annotation | What is wrong |
+| --- | --- |
+| `install-unbounded` | a step runs a package install with no `timeout-minutes` on the step or the job |
+| `workflow-unparsable` | the workflow could not be parsed, so its installs are not proven bounded (never a silent pass) |
+
+Unlike the unbounded-call scan and the workflow-standards warnings this check **blocks by
+default** (tracker t4456): the failure it prevents is a red, unlanded release PR, so catching it
+in the pull request that introduces it is the point. `fail-on-findings` does not apply to it; a
+check that cannot run (PyYAML missing, a workflow that will not parse, a malformed allowlist row)
+fails loudly for the same reason.
+
+The fix is one line in the caller's workflow:
+
+```yaml
+      - name: Install tools
+        timeout-minutes: 3
+        run: pip install --quiet -r requirements.txt
+```
+
+A `timeout-minutes` on the job bounds every step in it and satisfies the check for the whole job.
+
+### Deliberate exceptions
+
+An exception is a row in [`install-timeout-allowlist.tsv`](install-timeout-allowlist.tsv) —
+`repo<TAB>workflow path<TAB>job id<TAB>reason`, with `*` wildcards — added by a pull request to
+this repository. The allowlist is the estate's shared record: a comment in the caller's workflow
+silences nothing, and a row without a reason fails the check rather than passing silently. The
+list ships empty; every row needs a reason a reviewer can check.
+
+### Precision decisions
+
+- **A bounded command is not an install.** A line wrapped in coreutils `timeout 300 …` (or
+  `timeout 5m …`) is bounded and passes without touching the workflow.
+- **Comments and echoes are not commands.** `# pip install …` and `echo "npm install …"` do not
+  run an install, so they are not findings.
+- **Reusable-workflow caller jobs are exempt.** Workflow syntax bans `timeout-minutes` on a job
+  that calls a reusable workflow; the callee bounds its own jobs.
+- **`uses:` steps install nothing.** Marketplace actions own their own time limits.
+- **Expressions count as declarations.** `timeout-minutes: ${{ matrix.minutes }}` declares a
+  limit its author chose; judging values is the ci-standards budget rule's business, not this
+  check's.
+- **The command set is fixed.** `yarn`, `pnpm`, `cargo`, `uv sync` and friends are not scanned;
+  adding a tool trades recall for false positives on every consumer, so it is a deliberate change
+  with tests, not a drive-by.
+
+The finding count is on the action's `install-timeout-count` output. Disable the check on a
+repository that needs to deviate, and say why there:
+
+```yaml
+      - name: Run Estate Checks
+        uses: Automancer-Ltd/estate-checks@v1
+        with:
+          check-installs: 'false'
+```
+
+The tests (`scripts/test-install-timeouts.py`) pin every rule against a fixture that must be
+flagged and one that must not, including the allowlist wildcards and the exit codes, and the
+verify driver drives the real composite action red on an unbounded fixture and green on the
+bounded and skipped ones.
+
+---
+
 ## Known Gaps & Precision Decisions
 
 Under Automancer CI standards, **precision beats recall**: a check that produces false positives will be ignored or disabled. The following patterns are intentionally out of scope:
@@ -174,6 +252,8 @@ own. CI trigger, runner and timeout rules live in the estate's `ci-standards` sk
 | Input | Description | Default |
 |---|---|---|
 | `baseline-commit` | Baseline commit SHA to diff against on pull requests. Auto-detected from `github.event.pull_request.base.sha` on PRs. | `""` |
+| `check-installs` | Set to `'false'` to skip the install-timeout gate (a step installing packages with no `timeout-minutes` on the step or its job fails the run; see [Install timeouts](#install-timeouts-workflow-steps-that-install-packages)). | `'true'` |
+| `check-workflows` | Set to `'false'` to skip the workflow standards warnings (ci-standards rules 1-4, warn-only). | `'true'` |
 | `exclude-paths` | Comma- or newline-separated paths or glob patterns to exclude from scanning (e.g. browser UI folders). | `""` |
 | `exclude-test-paths` | Comma- or newline-separated test paths or globs to exclude (set to empty to disable default test exclusions). | `'*.test.*, *_test.py, tests/**, __tests__/**'` |
 | `fail-on-findings` | `false` (default): warnings only. `true`: findings and "could not run" fail the job. `auto` is a legacy alias for `false`. | `false` |
