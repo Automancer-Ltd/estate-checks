@@ -31,6 +31,11 @@ Most repositories pass no inputs. The built-in lists live in `classify.py`:
 - **Always the full suite:** CI files, dependency manifests and lockfiles,
   toolchain and runtime versions, TypeScript/lint/test/bundler config,
   Dockerfiles, schema files, SQL and migrations, and hosting config.
+- **Database tests and their harness always run the full suite.** A path
+  naming postgres, `pg`, `db` or `database` tests (`test_x_postgres.py`,
+  `x.postgres.test.ts`, `x.db.test.ts`, `tests/db/`, `scripts/ci-postgres-tests.sh`)
+  is `standard`, because a quick job may let database tests skip. KG PR #646
+  changed one, passed core with them skipped, and reddened master (t4647).
 - **Who reads the docs is detected, not declared.** When the answer depends on
   documentation, the action checks out the code and searches every non-doc file
   for each changed doc's path, its distinctive file name, or its folder in
