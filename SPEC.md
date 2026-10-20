@@ -7,7 +7,7 @@ Last verified: 2026-10-17 on automancer-vps
 
 ## North star
 
-Give repositories a shared CI check for outside network and subprocess calls that have no time limit, and for the mechanical workflow rules of `ci-standards`, so both are reported by a guard rather than remembered from prose.
+Give repositories a shared CI check for outside network and subprocess calls that have no time limit, for the mechanical workflow rules of `ci-standards`, and for workflow steps that install packages with no `timeout-minutes`, so all three are reported by a guard rather than remembered from prose.
 
 ## Key principles
 
@@ -21,9 +21,9 @@ Give repositories a shared CI check for outside network and subprocess calls tha
 
 ### Composite action (`action.yml`)
 
-- What it does: Sets up Semgrep, selects a pull request baseline or a full scan, applies exclusions, and runs the rule set. It supports custom rules, strict mode, and a findings count output. In the same job it runs the workflow standards check against the caller's own workflows and exposes its warning count. `check-workflows: 'false'` skips that second check.
+- What it does: Sets up Semgrep, selects a pull request baseline or a full scan, applies exclusions, and runs the rule set. It supports custom rules, strict mode, and a findings count output. In the same job it runs the workflow standards check against the caller's own workflows and exposes its warning count. `check-workflows: 'false'` skips that second check. A third step runs the install-timeout gate, which fails the run on an unbounded package install; `check-installs: 'false'` skips it, and its finding count is the `install-timeout-count` output.
 - State: built
-- Shaped by: Pull request differential scans, default warning behavior, and caller configuration in the action inputs.
+- Shaped by: Pull request differential scans, default warning behavior, caller configuration in the action inputs, and tracker t4456 for the blocking install gate.
 
 ### Unbounded call rules (`rules/unbounded-calls.yml`)
 
@@ -42,6 +42,12 @@ Give repositories a shared CI check for outside network and subprocess calls tha
 - What it does: Reads the caller's `.github/workflows/*.yml` and annotates breaches of `ci-standards` rules 1-4 — a job with no `timeout-minutes` or above the 30-minute cap, a workflow with no concurrency group, a `push:` without a branch filter or filtered away from the default branch, an organisation job whose `runs-on` is a hosted label literal instead of `vars.CI_RUNNER`, and an `on: schedule` trigger (`workflow-schedule-trigger`). A schedule is silent only when the workflow is on `HOSTED_MONITOR_SCHEDULES` and is a hosted monitor with no local dependencies (no checkout, no local action, no self-hosted runner). Warning only: it exits 0 with findings, and a workflow it cannot parse is reported as a warning rather than a clean result. Parses with `yaml.compose` so each annotation carries the line of the key at fault. The tests pin every rule against a fixture that must be flagged and one that must not.
 - State: built
 - Shaped by: The `ci-standards` rules, precision-over-recall (personal repositories, expressions, self-hosted labels, tag-only pushes and 10-30 minute timeouts are deliberately not judged), and Waseem's 2026-09-27 warn-only decision. Contradiction 7 of `/opt/automancer/auto/plans/repo-shaping-2026-10-15.md`.
+
+### Install timeout check (`scripts/install-timeouts.py`, `scripts/test-install-timeouts.py`, `install-timeout-allowlist.tsv`)
+
+- What it does: Reads the caller's `.github/workflows/*.yml` and fails the run when a `run:` step executes a package install — `pip install` (and `pip3`, `python -m pip`), `uv pip install`, `npm ci`/`npm install`, `apt-get install`/`apt install`, `go install` — while neither the step nor its job declares `timeout-minutes`. Deliberate exceptions are rows (`repo`, workflow path, job id, reason; `*` wildcards) in the shipped `install-timeout-allowlist.tsv`; a malformed row, a missing PyYAML or an unparsable workflow fails loudly rather than passing silently. Parses with `yaml.compose` and annotates on the install command's line.
+- State: built
+- Shaped by: tracker t4456 (the automancer-ops release check killed 4m38s into an unbounded `pip` install, 19 Oct 2026, run 39332563829) and precision-over-recall: comments, `echo` lines, `timeout N`-wrapped commands, expression timeouts and reusable-workflow caller jobs are not findings.
 
 ### Repository CI (`.github/workflows/ci.yml`)
 
