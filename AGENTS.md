@@ -39,5 +39,8 @@ Merging changes main; consumers execute the moving `v1` tag. Read the release
 procedure in `README.md` before changing tags. Preserve green exact-head CI and
 prove the candidate in a disposable consumer PR before moving `v1`. Keep the
 previous tag SHA for rollback. `deploy.json` names the live revision read.
+Production is consumers' CI: list them with
+`gh search code "estate-checks/tier@v1" --owner Automancer-Ltd`, and read a
+released change working in a consumer job log's `Tier:` and `Total findings:` lines.
 
 Last verified: 2026-10-21 on auto-vps.
