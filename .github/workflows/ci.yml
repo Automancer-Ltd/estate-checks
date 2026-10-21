@@ -58,11 +58,10 @@ jobs:
       - name: Bounded Semgrep install test
         run: scripts/test-install-semgrep.sh
 
-      - name: Semgrep rule tests and syntax
-        run: |
-          set -euo pipefail
-          semgrep --test --legacy rules/
-          semgrep --validate --config rules/unbounded-calls.yml
+      # An invalid rule file passes `semgrep --test` (exit 0) but fails every scan the
+      # next step drives (exit 7), so a separate `semgrep --validate` (~5 s) adds nothing.
+      - name: Semgrep rule fixtures
+        run: semgrep --test --legacy rules/
 
       - name: Verify real action journeys
         run: uv tool run --python 3.12 --from semgrep==1.178.0 --with PyYAML python scripts/verify-estate-checks.py --evidence .audit/ci-proof
