@@ -439,5 +439,45 @@ class PushToMain(unittest.TestCase):
         self.assertEqual(run_main("push", {**PUSH, "forced": True}, push_routes(TESTED_TREE, self.code))["tier"], STANDARD)
 
 
+GRAND = "g" * 40
+DISPATCH = {"ref": "refs/heads/main", "repository": {"default_branch": "main"}}
+
+
+def dispatch_routes(compare_from, compare_files, proven):
+    """A dispatch on main at AFTER, whose first parents are BEFORE then GRAND; `proven`
+    names the ancestors with a passing dispatch run. No PR run proves AFTER."""
+    runs = {sha: {"workflow_runs": [{"id": 1, "event": "workflow_dispatch"}] if sha in proven else []}
+            for sha in (BEFORE, GRAND)}
+    return {
+        **{f"actions/workflows/ci.yml/runs?status=success&head_sha={sha}": body for sha, body in runs.items()},
+        "actions/workflows/ci.yml/runs": {"workflow_runs": []},
+        f"git/commits/{AFTER}": {"tree": {"sha": OTHER_TREE}, "parents": [{"sha": BEFORE}]},
+        f"git/commits/{BEFORE}": {"tree": {"sha": OTHER_TREE}, "parents": [{"sha": GRAND}]},
+        f"git/commits/{GRAND}": {"tree": {"sha": OTHER_TREE}, "parents": []},
+        "commits/": [],
+        f"compare/{compare_from}...{AFTER}": {"files": compare_files},
+    }
+
+
+class DispatchOnMain(unittest.TestCase):
+    # t6155: after dropping push:, every deploy-on-main dispatch for a moved-main merge
+    # ran the full suite, where the push run it replaced had run the merge's own tier.
+    env = {"GITHUB_SHA": AFTER}
+
+    def test_docs_since_the_proven_parent_run_nothing(self):
+        routes = dispatch_routes(BEFORE, [changed("README.md", 3)], proven={BEFORE})
+        self.assertEqual(run_main("workflow_dispatch", DISPATCH, routes, {"README.md": ""}, self.env)["tier"], NONE)
+
+    def test_an_unproved_commit_in_between_joins_the_diff(self):
+        # BEFORE never passed CI, so its code must not escape: classify from GRAND.
+        routes = dispatch_routes(GRAND, [changed("README.md", 3), changed("app/a.ts", 100)], proven={GRAND})
+        routes[f"compare/{BEFORE}...{AFTER}"] = {"files": [changed("README.md", 3)]}
+        self.assertEqual(run_main("workflow_dispatch", DISPATCH, routes, {"README.md": ""}, self.env)["tier"], STANDARD)
+
+    def test_no_proven_ancestor_runs_the_full_suite(self):
+        routes = dispatch_routes(BEFORE, [changed("README.md", 3)], proven=set())
+        self.assertEqual(run_main("workflow_dispatch", DISPATCH, routes, {"README.md": ""}, self.env)["tier"], STANDARD)
+
+
 if __name__ == "__main__":
     unittest.main()

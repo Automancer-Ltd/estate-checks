@@ -516,23 +516,55 @@ def decide(event_name: str, event: dict[str, Any], cfg: Config, api: Api, github
         before, after = event.get("before", ""), event.get("after", "")
         if not before or set(before) == {"0"} or event.get("forced"):
             return Decision(STANDARD, "new or force-pushed branch")
-        skip, passed_head = passed_pr(api, after, workflow_path, job_name, cfg)
-        if skip:
-            return skip
-        body, _ = api.get(f"compare/{before}...{after}")
-        raw = body.get("files", [])
-        if passed_head:
-            # Code moved main while the PR waited: it joins the PR's diff so a merge
-            # skew still runs. Only a merge commit keeps the head as an ancestor;
-            # squash and rebase merges classify the PR's diff alone.
-            moved, _ = api.get(f"compare/{passed_head}...{after}")
-            extra: list[dict[str, Any]] = moved.get("files", []) if moved.get("status") == "ahead" else []
-            raw = raw + [f for f in extra if f["filename"] not in {g["filename"] for g in raw}]
-        if len(raw) >= 300:
-            return Decision(STANDARD, "300+ files changed (compare API limit)")
-        files = _files(raw)
-        return Decision(*classify(files, cfg), files=files)
+        return since(api, before, after, workflow_path, job_name, cfg)
+    if event_name == "workflow_dispatch" and event.get("ref") == default_branch_ref:
+        before = proven_ancestor(api, github_sha, workflow_path, job_name, cfg)
+        if not before:
+            return Decision(STANDARD, "no proven commit in the last 20 on the default branch")
+        return since(api, before, github_sha, workflow_path, job_name, cfg)
     return Decision(STANDARD, f"event {event_name} always runs the full suite")
+
+
+def proven_ancestor(api: Api, after: str, workflow_path: str, job_name: str, cfg: Config,
+                    depth: int = 20) -> str | None:
+    """The newest first-parent ancestor of `after` that CI proved: a passing push or dispatch
+    run of this workflow, or a tree a PR run passed. deploy-on-main's dispatch-ci runs CI for a
+    merge no PR run proved, and a dispatch has no `before`; classifying from this commit, as the
+    push run it replaced did, keeps a moved-main merge off the full suite, and any unproved
+    commit in between joins the diff instead of escaping it (gdp-knowledge-graph, t6155)."""
+    workflow = os.path.basename(workflow_path)
+    sha = after
+    for _ in range(depth):
+        parents = api.get(f"git/commits/{sha}")[0].get("parents", [])
+        if not parents:
+            return None
+        sha = parents[0]["sha"]
+        runs = api.paged(f"actions/workflows/{workflow}/runs?status=success&head_sha={sha}",
+                         key="workflow_runs", limit=20)
+        if any(r.get("event") in ("push", "workflow_dispatch") for r in runs) \
+                or passed_pr(api, sha, workflow_path, job_name, cfg)[0]:
+            return sha
+    return None
+
+
+def since(api: Api, before: str, after: str, workflow_path: str, job_name: str, cfg: Config) -> Decision:
+    """The tier for the default branch moving from proven `before` to `after`."""
+    skip, passed_head = passed_pr(api, after, workflow_path, job_name, cfg)
+    if skip:
+        return skip
+    body, _ = api.get(f"compare/{before}...{after}")
+    raw = body.get("files", [])
+    if passed_head:
+        # Code moved main while the PR waited: it joins the PR's diff so a merge
+        # skew still runs. Only a merge commit keeps the head as an ancestor;
+        # squash and rebase merges classify the PR's diff alone.
+        moved, _ = api.get(f"compare/{passed_head}...{after}")
+        extra: list[dict[str, Any]] = moved.get("files", []) if moved.get("status") == "ahead" else []
+        raw = raw + [f for f in extra if f["filename"] not in {g["filename"] for g in raw}]
+    if len(raw) >= 300:
+        return Decision(STANDARD, "300+ files changed (compare API limit)")
+    files = _files(raw)
+    return Decision(*classify(files, cfg), files=files)
 
 
 def _plan(environ: Mapping[str, str], cfg: Config, make_api: Callable[[str, str, str], Api]) -> Decision:
