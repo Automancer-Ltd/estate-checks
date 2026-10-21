@@ -193,6 +193,7 @@ def verify(evidence: Path) -> None:
                 event.write_text(json.dumps({"ref": "refs/heads/main", "before": "b" * 40,
                     "after": "a" * 40, "repository": {"default_branch": "main"},
                     "pull_request": {"number": 3, "labels": []}}))
+                moved = "CHANGELOG.md" if name == "docs-moved" else "src/cost.ts"
                 # A GitHub merge commit names the PR head as its second parent. No commit-to-PR
                 # route: GitHub fills that in only seconds after a merge, so it must not be needed.
                 server.routes = {
@@ -205,8 +206,10 @@ def verify(evidence: Path) -> None:
                         {"filename": "src/cost.ts", "additions": 51, "deletions": 0}]},
                     # What main holds beyond the PR's passed head: code, or only a changelog.
                     "compare/" + "h" * 40 + "..." + "a" * 40: {"status": "ahead", "files": [
-                        {"filename": "CHANGELOG.md" if name == "docs-moved" else "src/cost.ts",
-                         "additions": 51, "deletions": 0}]},
+                        {"filename": moved, "additions": 51, "deletions": 0}]},
+                    **{"git/trees/" + tree: {"tree": [
+                        {"path": p, "type": "blob", "mode": "100644", "sha": tree if p == moved else "1" * 40}
+                        for p in ("CHANGELOG.md", "src/cost.ts")]} for tree in (TREE, "2" * 40)},
                 }
                 env = {**os.environ, "GITHUB_EVENT_NAME": "workflow_dispatch" if name == "dispatch" else
                        "pull_request" if name == "api-failure" else "push", "GITHUB_SHA": TREE,

@@ -349,16 +349,25 @@ PUSH = {"ref": "refs/heads/main", "before": BEFORE, "after": AFTER, "repository"
 
 
 def push_routes(pushed_tree, compare_files, moved_files=None):
-    """compare_files is the merged PR's diff; moved_files is what main holds beyond its passed head."""
+    """compare_files is the merged PR's diff; moved_files is what the pushed tree holds
+    beyond the tree the PR run tested (and, for a merge commit, beyond its head)."""
+    moved = compare_files if moved_files is None else moved_files
+    tested = {"app/a.ts": "1", "CHANGELOG.md": "1", "README.md": "1"}
+    pushed = {**tested, **{m["filename"]: "2" for m in moved}}
+
+    def tree(files):
+        return {"truncated": False, "tree": [{"path": "app", "type": "tree", "mode": "040000", "sha": "t"}] + [
+            {"path": p, "type": "blob", "mode": "100644", "sha": sha} for p, sha in files.items()]}
     return {
         f"commits/{AFTER}/pulls": [{"number": 7, "merged_at": "x", "merge_commit_sha": AFTER, "head": {"sha": HEAD}}],
         "actions/workflows/ci.yml/runs": {"workflow_runs": [{"id": 99}]},
         "actions/runs/99/jobs": {"jobs": [{"name": "ci tier", "id": 5}]},
         "check-runs/5/annotations": [{"title": "ci-tier", "message": f"tier=standard tested-tree={TESTED_TREE}"}],
         f"git/commits/{AFTER}": {"tree": {"sha": pushed_tree}},
+        f"git/trees/{TESTED_TREE}": tree(tested),
+        f"git/trees/{pushed_tree}": tree(pushed),
         f"compare/{BEFORE}...{AFTER}": {"files": compare_files},
-        f"compare/{HEAD}...{AFTER}": {"status": "ahead",
-                                      "files": compare_files if moved_files is None else moved_files},
+        f"compare/{HEAD}...{AFTER}": {"status": "ahead", "files": moved},
     }
 
 
@@ -395,6 +404,21 @@ class PushToMain(unittest.TestCase):
         # PR's changelog landed between the PR's passing run and its merge.
         routes = push_routes(OTHER_TREE, self.code, moved_files=[changed("CHANGELOG.md", 4)])
         self.assertEqual(run_main("push", PUSH, routes, {"CHANGELOG.md": ""})["tier"], NONE)
+
+    def test_squash_merge_of_a_ci_change_after_docs_moved_main_runs_nothing(self):
+        # t6084: automancer-auto PR #389 changed ci.yml and was squash-merged after
+        # plans/ docs landed; the push re-ran the full suite (run 39658252274).
+        routes = push_routes(OTHER_TREE, [changed(".github/workflows/ci.yml", 3), changed("plans/x.md", 9)],
+                             moved_files=[changed("plans/x.md", 9)])
+        routes[f"compare/{HEAD}...{AFTER}"] = {"status": "diverged", "files": []}
+        result = run_main("push", PUSH, routes, {"plans/x.md": "", ".github/workflows/ci.yml": ""})
+        self.assertEqual(result["tier"], NONE)
+
+    def test_squash_merge_after_code_moved_main_runs_its_tier(self):
+        routes = push_routes(OTHER_TREE, [changed(".github/workflows/ci.yml", 3)],
+                             moved_files=[changed("plans/x.md", 9), changed("app/b.ts", 2)])
+        routes[f"compare/{HEAD}...{AFTER}"] = {"status": "diverged", "files": []}
+        self.assertEqual(run_main("push", PUSH, routes)["tier"], STANDARD)
 
     def test_without_a_passing_pr_run_the_whole_pr_diff_is_classified(self):
         routes = push_routes(OTHER_TREE, self.code, moved_files=[changed("CHANGELOG.md", 4)])
