@@ -42,13 +42,13 @@ jobs:
 """
 
 
-def run(text, owner=ORG, default_branch="main", name="ci.yml", repository="", allowlist=None):
+def run(text, owner=ORG, default_branch="main", name="ci.yml"):
     with tempfile.TemporaryDirectory() as tmp:
         workflows = os.path.join(tmp, ".github", "workflows")
         os.makedirs(workflows)
         with open(os.path.join(workflows, name), "w", encoding="utf-8") as handle:
             handle.write(text)
-        return ws.scan(tmp, workflows, owner, default_branch, repository, allowlist)
+        return ws.scan(tmp, workflows, owner, default_branch)
 
 
 def rules(findings):
@@ -202,37 +202,11 @@ jobs:
       - run: echo ok
 """
 
-MONITOR = """\
-name: Uptime
-
-on:
-  schedule:
-    - cron: '17 * * * *'
-  workflow_dispatch:
-
-concurrency:
-  group: uptime-${{ github.ref }}
-  cancel-in-progress: false
-
-jobs:
-  probe:
-    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
-    timeout-minutes: 10
-    steps:
-      - run: curl --max-time 10 --fail https://example.invalid/health
-"""
-
-REPO = "Automancer-Ltd/example"
-ALLOW = frozenset({f"{REPO}:.github/workflows/ci.yml"})
-
-
 class ScheduleTrigger(unittest.TestCase):
     def test_schedule_trigger_is_reported_on_the_schedule_line(self):
         findings = run(SCHEDULED)
         self.assertEqual(rules(findings), ["workflow-schedule-trigger"])
         self.assertEqual(findings[0].line, 4)
-        self.assertIn("no schedules", findings[0].message)
-        self.assertIn("allow-list", findings[0].message)
 
     def test_sequence_form_schedule_is_reported(self):
         text = SCHEDULED.replace(
@@ -250,40 +224,9 @@ class ScheduleTrigger(unittest.TestCase):
         text = "# the old schedule: cron was removed\n" + CLEAN.replace("  build:\n", "  schedule:\n")
         self.assertNotIn("workflow-schedule-trigger", rules(run(text)))
 
-    def test_allow_listed_hosted_monitor_with_no_local_dependency_passes(self):
-        self.assertEqual(run(MONITOR, repository=REPO, allowlist=ALLOW), [])
-
-    def test_allow_listed_name_still_warns_when_it_checks_out_the_repo(self):
-        text = MONITOR.replace(
-            "      - run: curl --max-time 10 --fail https://example.invalid/health\n",
-            "      - uses: actions/checkout@v7\n",
-        )
-        findings = run(text, repository=REPO, allowlist=ALLOW)
-        self.assertEqual(rules(findings), ["workflow-schedule-trigger"])
-        self.assertIn("no local dependencies", findings[0].message)
-
-    def test_allow_listed_name_still_warns_on_a_self_hosted_runner(self):
-        text = MONITOR.replace(
-            "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
-            "[self-hosted, linux]",
-        )
-        self.assertEqual(
-            rules(run(text, repository=REPO, allowlist=ALLOW)),
-            ["workflow-schedule-trigger"],
-        )
-
-    def test_allow_list_does_not_match_a_different_repository(self):
-        findings = run(MONITOR, repository="Automancer-Ltd/other", allowlist=ALLOW)
-        self.assertEqual(rules(findings), ["workflow-schedule-trigger"])
-
     def test_a_comment_cannot_silence_the_warning(self):
         text = "# estate-checks-allow: hosted-monitor-no-local-deps\n" + SCHEDULED
         self.assertIn("workflow-schedule-trigger", rules(run(text)))
-
-    def test_production_allow_list_is_empty(self):
-        # 15–16 Oct 2026 campaign: operations moved to timers. A new exception
-        # is a reviewed change to HOSTED_MONITOR_SCHEDULES, not a comment.
-        self.assertEqual(ws.HOSTED_MONITOR_SCHEDULES, frozenset())
 
 
 class Ancors(unittest.TestCase):

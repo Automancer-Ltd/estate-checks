@@ -207,6 +207,20 @@ class PullRequest(unittest.TestCase):
         repo = {"guides/ONBOARDING.md": "", "scripts/build.py": 'glob("**/ONBOARDING.md")\n'}
         self.assertEqual(run_main("pull_request", event, routes, repo)["tier"], CORE)
 
+    def test_records_naming_a_doc_do_not_make_it_code(self):
+        # t6067: logs and records under plans/ named new lane notes, so plans-only
+        # pushes in automancer-auto ran the full suite (run 39616824682).
+        event, routes = pr([changed("plans/lanes/wick.md", 2)])
+        repo = {"plans/lanes/wick.md": "",
+                "plans/queue/run.jsonl": '{"wrote": "plans/lanes/wick.md"}\n',
+                "docs/recon/2026-10.json": '{"note": "see wick.md"}\n'}
+        self.assertEqual(run_main("pull_request", event, routes, repo)["tier"], NONE)
+
+    def test_a_manifest_listing_a_docs_full_path_is_code(self):
+        event, routes = pr([changed("guides/STYLE.md", 2)])
+        repo = {"guides/STYLE.md": "", "config/prompts.json": '["guides/STYLE.md"]\n'}
+        self.assertEqual(run_main("pull_request", event, routes, repo)["tier"], CORE)
+
     def test_no_checkout_means_full_suite(self):
         event, routes = pr([changed("README.md")])
         self.assertEqual(run_main("pull_request", event, routes, repo_files=None)["tier"], STANDARD)

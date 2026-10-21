@@ -90,6 +90,12 @@ DOC_SUFFIXES = (".md", ".rst")
 NOT_READERS = {".gitignore", ".gitattributes", ".dockerignore", ".npmignore", ".prettierignore",
                ".eslintignore", ".gitleaks.toml", ".gitleaksignore", "CODEOWNERS"}
 MAX_SCAN_BYTES = 2_000_000
+# Records are data, never code that reads a doc: a log naming `wick.md` made every
+# plans-only push run the full suite (automancer-auto run 39616824682, t6067).
+DATA_SUFFIXES = (".jsonl", ".ndjson", ".csv", ".tsv", ".log")
+# A manifest a program loads can list a doc, but only by its full path; a bare
+# file name or folder in one is a record, not a read.
+LIST_SUFFIXES = (".json", ".txt")
 DEFAULT_TEST_GLOBS = ["**/*.test.*", "**/*.spec.*", "**/*_test.*", "**/test_*.py", "**/__tests__/**"]
 # A module with one of these names is imported by its folder: `engine/effects`.
 FOLDER_MODULES = {"index", "__init__", "mod", "main"}
@@ -237,7 +243,8 @@ def docs_read_by_code(docs: list[str], root: str, tracked: list[str]) -> dict[st
     wanted = {d: reader_patterns(d) for d in docs}
     found: dict[str, str] = {}
     for rel in tracked:
-        if rel.endswith(DOC_SUFFIXES) or os.path.basename(rel) in NOT_READERS or len(found) == len(wanted):
+        if (rel.endswith(DOC_SUFFIXES + DATA_SUFFIXES) or os.path.basename(rel) in NOT_READERS
+                or len(found) == len(wanted)):
             continue
         full = os.path.join(root, rel)
         try:
@@ -251,6 +258,7 @@ def docs_read_by_code(docs: list[str], root: str, tracked: list[str]) -> dict[st
             continue
         text = code_lines(raw.decode("utf-8", "replace"))
         for doc, pats in wanted.items():
+            pats = pats[:1] if rel.endswith(LIST_SUFFIXES) else pats
             if doc not in found and any(lit in text and rx.search(text) for lit, rx in pats):
                 found[doc] = rel
     return found
