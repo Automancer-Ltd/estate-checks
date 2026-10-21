@@ -24,9 +24,6 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          cache-dependency-glob: uv.lock
 
       - name: Install check tools
         run: |
@@ -78,37 +75,6 @@ jobs:
           path: .audit/ci-proof
           include-hidden-files: true
           retention-days: 14
-
-      - name: Warn mode — unresolvable baseline warns and does not fail
-        id: test-warn
-        if: github.event_name == 'pull_request'
-        continue-on-error: true
-        uses: ./
-        with:
-          baseline-commit: '0000000000000000000000000000000000000000'
-
-      - name: Strict mode — unresolvable baseline fails
-        id: test-strict
-        if: github.event_name == 'pull_request'
-        continue-on-error: true
-        uses: ./
-        with:
-          baseline-commit: '0000000000000000000000000000000000000000'
-          fail-on-findings: 'true'
-
-      - name: Assert warn mode passed and strict mode failed
-        if: github.event_name == 'pull_request'
-        run: |
-          set -euo pipefail
-          if [ "${{ steps.test-warn.outcome }}" != "success" ]; then
-            echo "Expected the default (warn) mode to pass on a check that could not run, got ${{ steps.test-warn.outcome }}"
-            exit 1
-          fi
-          if [ "${{ steps.test-strict.outcome }}" != "failure" ]; then
-            echo "Expected strict mode to fail on a check that could not run, got ${{ steps.test-strict.outcome }}"
-            exit 1
-          fi
-          echo "Warn mode warns; strict mode fails."
 
       - name: Run local action
         uses: ./

@@ -216,7 +216,6 @@ runs:
         INPUT_CHECK_WORKFLOWS: ${{ inputs.check-workflows }}
         ACTION_PATH: ${{ github.action_path }}
         REPO_OWNER: ${{ github.repository_owner }}
-        REPOSITORY: ${{ github.repository }}
         DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
       run: |
         set -euo pipefail
@@ -238,7 +237,6 @@ runs:
         OUTPUT="$(python3 "$ACTION_PATH/scripts/workflow-standards.py" \
           --root "$GITHUB_WORKSPACE" \
           --owner "$REPO_OWNER" \
-          --repository "$REPOSITORY" \
           --default-branch "$DEFAULT_BRANCH")"
         printf '%s\n' "$OUTPUT"
 

@@ -221,6 +221,8 @@ def verify(evidence: Path) -> None:
             for name, bad, strict in [("bounded", False, False), ("warn", True, False),
                                        ("strict", True, True), ("unavailable", False, False),
                                        ("strict-unavailable", False, True),
+                                       ("baseline-unresolvable", False, False),
+                                       ("strict-baseline-unresolvable", False, True),
                                        ("excluded-server", True, False), ("skip-workflows", True, False)]:
                 dest = evidence / name
                 dest.mkdir()
@@ -247,16 +249,19 @@ def verify(evidence: Path) -> None:
                 inputs = {"fail-on-findings": str(strict).lower()}
                 if name in ("unavailable", "strict-unavailable"):
                     inputs["rules-path"] = str(dest / "missing.yml")
+                if "baseline" in name:
+                    inputs["baseline-commit"] = "0" * 40
                 if name == "excluded-server":
                     inputs["exclude-paths"] = "server/**"
                 if name == "skip-workflows":
                     inputs["check-workflows"] = "false"
                 code, outputs = action(ROOT / "action.yml", work, dest, env, inputs)
                 logs = "\n".join(p.read_text() for p in dest.glob("*-log.txt"))
+                could_not_run = "unavailable" in name or "baseline" in name
                 if strict:
-                    expected = "Estate check could not run" if name == "strict-unavailable" else "unbounded outside call(s) detected"
+                    expected = "Estate check could not run" if could_not_run else "unbounded outside call(s) detected"
                     assert code != 0 and expected in logs, logs
-                elif name == "unavailable":
+                elif could_not_run:
                     assert code == 0 and "Estate check could not run" in logs, logs
                 else:
                     assert code == 0, logs

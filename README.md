@@ -91,11 +91,8 @@ What the check deliberately does not judge, because a warning that is wrong gets
   not a timer. Dependabot's own `schedule:` in `.github/dependabot.yml` is not a workflow trigger
   and is not read.
 
-`on: schedule` is allowed only for the documented ci-standards exception: a hosted monitor with no
-local dependencies (no checkout, no `uses: ./`, no self-hosted runner). That workflow must be named
-in `HOSTED_MONITOR_SCHEDULES` inside `scripts/workflow-standards.py` as
-`owner/repo:.github/workflows/name.yml`. A comment in the workflow does not silence the warning.
-The list is empty: the 15–16 Oct 2026 campaign moved operations to auto-vps timers.
+`on: schedule` has no exception: ci-standards bans scheduled CI in every repository (Waseem,
+21 Oct 2026), and a comment in the workflow does not silence the warning.
 
 Disable the check entirely on a repository that needs to deviate, and say why in that repository:
 
@@ -324,19 +321,3 @@ until a web surface exists, and that visibility is the record:
   that the product is not in the registry
 
 Do not register a fake web product to clear those warnings.
-
-### Automated Updates via Dependabot
-Repos pinning specific release tags (e.g. `uses: Automancer-Ltd/estate-checks@v1.0.1`) can configure Dependabot to automatically propose version bumps.
-
-Add to `.github/dependabot.yml` in the caller repository:
-
-```yaml
-version: 2
-updates:
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "monthly"
-    commit-message:
-      prefix: "chore(deps)"
-```

@@ -22,13 +22,14 @@ SEMGREP_INSTALL_COMMAND="[ -e $t/flag ] || { touch $t/flag; exit 1; }" "$SCRIPT"
 grep -q "attempt 2)" "$t/flaky" || fail "flaky install not recovered on attempt 2"
 
 # An installer that hangs (the 19 Oct shape, ignoring TERM) ends in seconds, with a clear message.
+# One attempt: the flaky case above already proves the retry.
 start=$SECONDS
-if SEMGREP_INSTALL_COMMAND='trap "" TERM; sleep 120' SEMGREP_INSTALL_ATTEMPTS=2 SEMGREP_INSTALL_TIMEOUT=2 \
+if SEMGREP_INSTALL_COMMAND='trap "" TERM; sleep 120' SEMGREP_INSTALL_ATTEMPTS=1 SEMGREP_INSTALL_TIMEOUT=2 \
     "$SCRIPT" 9.9.9 >"$t/stall" 2>&1; then
   fail "a stalled install was reported as success"
 fi
 elapsed=$((SECONDS - start))
-grep -q "attempt 2/2 failed or timed out after 2s" "$t/stall" || fail "stall not bounded and retried: $(cat "$t/stall")"
-grep -q "could not install semgrep 9.9.9 after 2 attempts" "$t/stall" || fail "failure not reported"
+grep -q "attempt 1/1 failed or timed out after 2s" "$t/stall" || fail "stall not bounded and retried: $(cat "$t/stall")"
+grep -q "could not install semgrep 9.9.9 after 1 attempts" "$t/stall" || fail "failure not reported"
 [ "$elapsed" -lt 30 ] || fail "a stalled install took ${elapsed}s"
 echo "ok: install bounded per attempt, retried, a stall fails in ${elapsed}s"
