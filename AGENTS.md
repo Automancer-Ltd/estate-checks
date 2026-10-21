@@ -23,6 +23,8 @@ No generated code or build is needed for symbol navigation.
 
 - Why only quick CI? `tier/classify.py:classify` decides `none/core/standard`;
   `_scan` checks doc readers, selects tests and escalates unmatched Convex files.
+- Why did a push to main skip CI? `tier/classify.py:decide` (push branch) and
+  `passed_pr`: the merged head's passed tree, or only docs moved since it.
 - Which tests run for file X? `direct_tests` uses `reference_keys`, relative
   imports and neighbouring test names. `tier/action.yml` exposes `direct-tests`.
 - Force full CI? `ci:full`, `full-paths` or size limits; see `tier/README.md`.
