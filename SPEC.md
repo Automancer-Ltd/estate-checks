@@ -1,9 +1,9 @@
 # Estate Checks — Living Specification
 
-Last verified: 2026-10-17 on automancer-vps
+Last verified: 2026-10-21 on auto-vps
 
 > Internal living spec. Update the relevant module section in the SAME branch
-> as any behaviour change. Last verified against the code: 2026-10-17.
+> as any behaviour change. Last verified against the code: 2026-10-21.
 
 ## North star
 
@@ -51,13 +51,13 @@ Give repositories a shared CI check for outside network and subprocess calls tha
 
 ### Repository CI (`.github/workflows/ci.yml`)
 
-- What it does: One required `check` job runs Ruff, strict basedpyright on every production Python script, actionlint, Semgrep rule fixtures, script tests and the actual composite action. Warning and strict modes, including an unresolvable baseline, are exercised by the scripted path. `scripts/check` is the local quick verdict; it runs only test files named by the caller. Tool versions and PyYAML stubs are locked in `uv.lock`. The project-local `verify-estate-checks` skill executes both action manifests against isolated synthetic consumers and retains their public outputs, annotations and logs. CI runs it and uploads its evidence. Hosted checkout and token behavior are separately proved in a disposable consumer PR before release.
+- What it does: One required `check` job that always reports. It runs `scripts/check` (the local quick verdict) on every script test, the Semgrep rule fixtures, the scripted path (`verify-estate-checks`, evidence uploaded), and the composite action on this repository. A disposable consumer PR proves hosted behaviour before a release.
 - State: built
 - Shaped by: The rule fixtures, validation tests, and the composite action's public inputs.
 
 ### CI tier action (`tier/`)
 
-- What it does: Classifies a pull request or default-branch push as `none`, `core` or `standard` from the changed files, per-repo docs and full-suite globs, and size limits. On a default-branch push it skips when the pushed tree equals the tree the merged PR's passing run recorded; otherwise, when that PR's head passed and the merge descends from it, documentation alone beyond that head (a changelog that landed meanwhile) gives `none`, and code beyond it is classified together with the PR's diff. Any failure resolves to `standard`. Tests for Convex modules are also selected by generated `api.<path>` and `internal.<path>` references. If any changed Convex file has no matching test, the tier is `standard`, including when other changed files have tests. Optional `sparse-checkout` and `sparse-checkout-cone-mode` inputs control its conditional checkout. Defaults keep a full checkout with cone mode enabled. Consumers must retain all code, tests, docs and configuration the classifier reads. Optional `docs-include` names a non-runtime agent or skill directory as documentation even though `.agents/**` and `**/skills/**` are excluded by default. It cannot reclassify product, content, page or test markdown, and it does not override full-paths or reader detection. Record files (`.jsonl`, `.ndjson`, `.csv`, `.tsv`, `.log`) never count as doc readers; a `.json` or `.txt` file counts only by the doc's full path. Estate and secret scans stay the consumer's unconditional steps.
+- What it does: Classifies a pull request or default-branch push as `none`, `core` or `standard` from the changed files, docs and full-suite globs, and size limits; on a push it reuses the merged head's passing run (see `tier/README.md`, which owns every rule and input). Any failure resolves to `standard`. Estate and secret scans stay the consumer's unconditional steps.
 - State: built
 - Shaped by: Waseem's proportionate-CI decisions of 2026-10-03 (`auto/plans/ci-proportionate-2026-10-03.md`) and the cases in `tier/test_classify.py`.
 
