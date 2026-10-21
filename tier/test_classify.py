@@ -334,6 +334,45 @@ class PullRequest(unittest.TestCase):
                          ["tests/deploy-config.test.ts", "tools/site/__tests__/render.test.js",
                           "tools/site/build.test.js"])
 
+    def test_setup_every_test_runs_needs_the_full_suite(self):
+        # gdp-chorus names src/test/setup.ts only in vite.config.ts; a one-line change ran
+        # core with no tests. tallow and the ERP listed their setup in full-paths by hand.
+        configs = {
+            "vitest-string": ("vite.config.ts", 'test: { setupFiles: "./src/test/setup.ts" }\n',
+                              "src/test/setup.ts"),
+            "vitest-array": ("vitest.config.ts", 'setupFiles: ["tests/setup/spend-ledger.ts"],\n',
+                             "tests/setup/spend-ledger.ts"),
+            "resolved": ("vitest.clockshift.config.mts",
+                         'setupFiles: [path.resolve(import.meta.dirname, "test/clock.setup.mjs")],\n',
+                         "test/clock.setup.mjs"),
+            "nested-config": ("web/vitest.config.ts", "setupFiles: ['./setup']\n", "web/setup.ts"),
+            "jest-package": ("package.json", '{"jest": {"setupFilesAfterEnv": ["<rootDir>/jest.setup.js"]}}\n',
+                             "jest.setup.js"),
+            "playwright": ("e2e/playwright.config.ts", "globalSetup: './global-setup.ts',\n",
+                           "e2e/global-setup.ts"),
+        }
+        for name, (config, text, setup) in configs.items():
+            with self.subTest(name):
+                event, routes = pr([changed(setup, 2)])
+                repo = {config: text, setup: "", "src/a.test.ts": "test('a', () => {});\n"}
+                result = run_main("pull_request", event, routes, repo)
+                self.assertEqual(result["tier"], STANDARD)
+                self.assertIn(f"{setup} is test setup that {config} runs before every test", result["reason"])
+                self.assertEqual(json.loads(result["direct-tests"]), [])
+
+    def test_pytest_conftest_needs_the_full_suite(self):
+        for path in ("conftest.py", "services/api/tests/conftest.py"):
+            with self.subTest(path):
+                self.assertEqual(classify([f(path, 1)], DEFAULTS)[0], STANDARD)
+
+    def test_code_a_config_names_outside_test_setup_stays_core(self):
+        event, routes = pr([changed("src/main.ts", 2)])
+        repo = {"vite.config.ts": 'build: { input: "src/main.ts" }, test: { setupFiles: ["src/setup.ts"] }\n',
+                "src/main.ts": "", "src/setup.ts": "", "src/main.test.ts": "test('m', () => {});\n"}
+        result = run_main("pull_request", event, routes, repo)
+        self.assertEqual(result["tier"], CORE)
+        self.assertEqual(json.loads(result["direct-tests"]), ["src/main.test.ts"])
+
     def test_a_dotfile_names_only_the_tests_that_name_it(self):
         event, routes = pr([changed("config/.release-notes.json", 2), changed(".notes.json", 1)])
         repo = {
