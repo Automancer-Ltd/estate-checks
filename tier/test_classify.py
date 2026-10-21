@@ -185,6 +185,30 @@ class PullRequest(unittest.TestCase):
                 ".github/workflows/ci.yml": "    # AGENTS.md says why\n    run: pnpm test\n"}
         self.assertEqual(run_main("pull_request", event, routes, repo)["tier"], NONE)
 
+    def test_docs_named_in_prose_or_skipped_by_name_run_nothing(self):
+        # automancer-ops PR #976 ran the full suite: drain.py's prompt names AGENTS.md.
+        event, routes = pr([changed("AGENTS.md", 2), changed("docs/RUNBOOK.md", 2)])
+        repo = {"AGENTS.md": "", "docs/RUNBOOK.md": "",
+                "drain/drain.py": 'PROMPT = """\n1. Read the project\'s AGENTS.md and the skills.\n"""\n',
+                "src/msg.ts": 'const m = "See docs/RUNBOOK.md for the drill";\nconst n = "(see docs/RUNBOOK.md)";\n',
+                "scripts/clutter.py": 'HOME_ALLOW = {\n    "AGENTS.md",\n}\n',
+                "scripts/purge.sh": "find . -not -name 'AGENTS.md' -print0\n",
+                "scripts/msg.sh": 'echo "Read AGENTS.md first"\n',
+                "tests/fixture.test.sh": 'touch "$FIXTURE/docs/AGENTS.md"\n',
+                "systemd/x.service": "[Unit]\nDocumentation=file:/opt/ops/docs/RUNBOOK.md\n"}
+        self.assertEqual(run_main("pull_request", event, routes, repo)["tier"], NONE)
+
+    def test_doc_code_uses_as_a_path_is_code(self):
+        readers = {"scripts/load.sh": 'RUNBOOK="${RUNBOOK:-$OPS_DIR/docs/RUNBOOK.md}"\n',
+                   "scripts/size.sh": "wc -c AGENTS.md docs/RUNBOOK.md\n",
+                   "scripts/size.py": 'size = (ROOT / "AGENTS.md").stat().st_size\n',
+                   "ci/check.yml": 'run: test -s "$GITHUB_WORKSPACE/AGENTS.md"\n'}
+        for path, text in readers.items():
+            with self.subTest(path):
+                event, routes = pr([changed("AGENTS.md", 2), changed("docs/RUNBOOK.md", 2)])
+                repo = {"AGENTS.md": "", "docs/RUNBOOK.md": "", path: text}
+                self.assertEqual(run_main("pull_request", event, routes, repo)["tier"], CORE)
+
     def test_doc_a_script_reads_on_a_code_line_is_code(self):
         event, routes = pr([changed("docs/RUNBOOK.md", 4)])
         repo = {"docs/RUNBOOK.md": "", "scripts/check.sh": "# check the runbook\ngrep -q drill docs/RUNBOOK.md\n"}

@@ -218,23 +218,58 @@ def classify(files: list[ChangedFile], cfg: Config, labels: Iterable[str] = (),
     return STANDARD, f"{len(code)} file(s), {lines} line(s) changed"
 
 
-def reader_patterns(doc: str) -> list[tuple[str, re.Pattern[str]]]:
-    """How code refers to a doc: its path, a distinctive file name, or its folder in quotes.
+# What may stand before a doc path code uses: a quoted literal or the end of one (`"docs/x.md"`, `root / 'x.md'`,
+# `` `${dir}/RUNBOOK.md` ``). Prose in a string names a doc between words instead:
+# automancer-ops drain/drain.py's prompt "Read the project's AGENTS.md and the
+# skills" sent every AGENTS.md edit to the full suite (PR #976, 21 Oct 2026).
+QUOTED = r"(?<=[\"'/\\])"
+# Or an unquoted shell argument or list entry (`grep -q x docs/RUNBOOK.md`, `- docs/x.md`,
+# `wc -c AGENTS.md README.md`), only in files where bare words can be paths.
+BARE = r"(?:(?<![^\s=/:])|(?<=:-))"
+# A generic name (GENERIC_DOC_NAMES) is any such file, usually not this repo's: a set of
+# home-directory names, `~/.codex/AGENTS.md`, `$FIXTURE/docs/AGENTS.md`. It counts only
+# with nothing but the root or a variable folder before it: `join(root, "README.md")`,
+# `open("AGENTS.md")`, `"$ROOT/AGENTS.md"`, `./README.md`, `cat AGENTS.md`.
+ROOTED = r"(?:\$\{?\w+\}?|[})]|(?<![^\s\"'`=])\.?)/"
+GENERIC_QUOTED = r"(?:[(,/]\s?[\"']|" + ROOTED + ")"
+GENERIC_BARE = r"(?:(?<![^\s=])|" + ROOTED + ")"
+# And what follows it: the literal's closing quote, or for a bare path the line's end, an
+# operator, a flag or another path.
+QUOTE_END = r"(?=[\"'`])"
+BARE_END = r"(?=[ \t]*$|[|)}<>]|[ \t]+(?:[-|&<>\\]|\S+[./]\S+))"
+# Bare words in these are prose or identifiers, never paths. ponytail: a shell command
+# inside a string here (`execSync("cat docs/x.md")`) is missed; list the file in
+# `full-paths` if one ever matters.
+CODE_SUFFIXES = (".py", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".mts", ".cts", ".go", ".rs",
+                 ".rb", ".java", ".kt", ".swift", ".cs", ".php", ".html", ".vue", ".svelte", ".json")
+CODE_SHEBANG = re.compile(r"#!.*\b(python|node|deno|bun|ruby)")
+# Neither an argument that skips a file (automancer-ops al-staging-log-purge.sh runs
+# `find ... -not -name 'AGENTS.md'`) nor a systemd unit's `Documentation=` link reads it.
+NOT_READS = re.compile(r"(?:(?:-not|!)\s+-i?name|--exclude(?:-dir)?)[\s=]+\S+|^Documentation=.*", re.M)
 
-    Each pattern comes with the literal it must contain, so a plain substring
-    test rules most files out before any regex runs. The folder must be at least
-    two levels deep and directly followed by a quote (`"docs/reports"` or
-    `'docs/reports/'`), which is how code lists a directory; a comment citing
-    `docs/plans/x.md` does not make every plan code.
+
+def reader_patterns(doc: str) -> list[tuple[str, re.Pattern[str], re.Pattern[str]]]:
+    """How code refers to a doc: its path or a distinctive file name used as a path,
+    or its folder in quotes. Each comes as (literal, quoted form, bare form).
+
+    The literal lets a plain substring test rule most files out before any regex
+    runs. The folder must be at least two levels deep and directly followed by a
+    quote (`"docs/reports"` or `'docs/reports/'`), which is how code lists a
+    directory; a comment citing `docs/plans/x.md` does not make every plan code.
     """
-    pats = [(doc, re.compile(re.escape(doc)))]
+    def path(lit: str) -> tuple[str, re.Pattern[str], re.Pattern[str]]:
+        generic = lit.lower() in GENERIC_DOC_NAMES
+        quoted, bare = (GENERIC_QUOTED, GENERIC_BARE) if generic else (QUOTED, BARE)
+        return (lit, re.compile(quoted + re.escape(lit) + QUOTE_END),
+                re.compile(bare + re.escape(lit) + BARE_END, re.M))
+    pats = [path(doc)]
     name = doc.rsplit("/", 1)[-1]
     if "/" in doc and name.lower() not in GENERIC_DOC_NAMES:
-        pats.append((name, re.compile(r"(?<![\w.-])" + re.escape(name))))
+        pats.append(path(name))
     parts = doc.split("/")[:-1]
     for depth in range(2, len(parts) + 1):
-        folder = "/".join(parts[:depth])
-        pats.append((folder, re.compile(re.escape(folder) + r"/?[\"'`]")))
+        folder = re.compile(re.escape("/".join(parts[:depth])) + r"/?[\"'`]")
+        pats.append(("/".join(parts[:depth]), folder, folder))
     return pats
 
 
@@ -256,10 +291,13 @@ def docs_read_by_code(docs: list[str], root: str, tracked: list[str]) -> dict[st
             continue
         if b"\0" in raw:
             continue
-        text = code_lines(raw.decode("utf-8", "replace"))
+        decoded = raw.decode("utf-8", "replace")
+        text = NOT_READS.sub("", code_lines(decoded))
+        bare = not (rel.endswith(CODE_SUFFIXES) or CODE_SHEBANG.match(decoded))
         for doc, pats in wanted.items():
             pats = pats[:1] if rel.endswith(LIST_SUFFIXES) else pats
-            if doc not in found and any(lit in text and rx.search(text) for lit, rx in pats):
+            if doc not in found and any(lit in text and (quoted.search(text) or bare and loose.search(text))
+                                        for lit, quoted, loose in pats):
                 found[doc] = rel
     return found
 
