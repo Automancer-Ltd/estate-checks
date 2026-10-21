@@ -182,7 +182,7 @@ def verify(evidence: Path) -> None:
                 assert json.loads(outputs["direct-tests"]) == tests, (name, outputs)
                 results.append({"journey": name, "outputs": outputs})
 
-            for name in ("tested-push", "merge-skew", "api-failure", "dispatch"):
+            for name in ("tested-push", "merge-skew", "docs-moved", "api-failure", "dispatch"):
                 dest = evidence / name
                 dest.mkdir()
                 work = scratch / name
@@ -200,6 +200,10 @@ def verify(evidence: Path) -> None:
                     "git/commits/" + "a" * 40: {"tree": {"sha": TREE if name == "tested-push" else "2" * 40}},
                     "compare/" + "b" * 40 + "..." + "a" * 40: {"files": [
                         {"filename": "src/cost.ts", "additions": 51, "deletions": 0}]},
+                    # What main holds beyond the PR's passed head: code, or only a changelog.
+                    "compare/" + "h" * 40 + "..." + "a" * 40: {"files": [
+                        {"filename": "CHANGELOG.md" if name == "docs-moved" else "src/cost.ts",
+                         "additions": 51, "deletions": 0}]},
                 }
                 env = {**os.environ, "GITHUB_EVENT_NAME": "workflow_dispatch" if name == "dispatch" else
                        "pull_request" if name == "api-failure" else "push", "GITHUB_SHA": TREE,
@@ -209,7 +213,8 @@ def verify(evidence: Path) -> None:
                        "GITHUB_WORKSPACE": str(work), "RUNNER_TEMP": str(dest),
                        "GITHUB_STEP_SUMMARY": str(dest / "summary.md")}
                 code, outputs = action(ROOT / "tier/action.yml", work, dest, env)
-                assert code == 0 and outputs["tier"] == ("none" if name == "tested-push" else "standard"), outputs
+                assert code == 0 and outputs["tier"] == (
+                    "none" if name in ("tested-push", "docs-moved") else "standard"), outputs
                 results.append({"journey": name, "outputs": outputs})
 
             for name, bad, strict in [("bounded", False, False), ("warn", True, False),

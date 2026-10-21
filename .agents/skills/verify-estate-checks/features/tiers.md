@@ -17,7 +17,10 @@ steps against a synthetic PR file API and committed checkout.
 - `full-label` and `full-path`: `ci:full` and additional full-path globs each
   return `standard`, including an otherwise small or documentation-only change.
 - `tested-push`: identical recorded and pushed Git trees return `none`.
-- `merge-skew`: different trees require work; its large diff returns `standard`.
+- `merge-skew`: main moved by code since the PR's head passed, so the trees
+  differ and that code's large diff returns `standard`.
+- `docs-moved`: main moved only by a changelog since the PR's head passed;
+  only that difference is classified, so it returns `none`.
 - `db-test`: a one-line change to `workers/test_cost_postgres.py` returns
   `standard`, because a quick job may let database tests skip (t4647).
 - `api-failure` and `dispatch`: API errors and manual events return `standard`.

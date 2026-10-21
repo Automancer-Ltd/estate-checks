@@ -396,12 +396,13 @@ def tested_tree_of_run(api: Api, run_id: int, job_name: str) -> str | None:
     return None
 
 
-def already_tested(api: Api, after: str, workflow_path: str, job_name: str) -> str | None:
-    """If the pushed tree is exactly a tree a PR run passed, say which PR."""
+def passed_pr(api: Api, after: str, workflow_path: str, job_name: str) -> tuple[str | None, str | None]:
+    """(skip reason, passed head): the reason when the pushed tree is exactly a tree a PR
+    run passed; otherwise the head SHA of the merged PR if a PR run of it passed."""
     pulls, _ = api.get(f"commits/{after}/pulls")
     merged = [p for p in pulls if p.get("merged_at") and p.get("merge_commit_sha") == after]
     if not merged:
-        return None
+        return None, None
     pr = merged[0]
     workflow = os.path.basename(workflow_path)
     runs = api.paged(f"actions/workflows/{workflow}/runs?event=pull_request&status=success&head_sha={pr['head']['sha']}",
@@ -409,8 +410,8 @@ def already_tested(api: Api, after: str, workflow_path: str, job_name: str) -> s
     pushed_tree = tree_of(api, after)
     for run in runs:
         if tested_tree_of_run(api, run["id"], job_name) == pushed_tree:
-            return f"main's tree is exactly what PR #{pr['number']} passed in run {run['id']}"
-    return None
+            return f"main's tree is exactly what PR #{pr['number']} passed in run {run['id']}", None
+    return None, pr["head"]["sha"] if runs else None
 
 
 @dataclass
@@ -434,10 +435,15 @@ def decide(event_name: str, event: dict[str, Any], cfg: Config, api: Api, github
         before, after = event.get("before", ""), event.get("after", "")
         if not before or set(before) == {"0"} or event.get("forced"):
             return Decision(STANDARD, "new or force-pushed branch")
-        skip = already_tested(api, after, workflow_path, job_name)
+        skip, passed_head = passed_pr(api, after, workflow_path, job_name)
         if skip:
             return Decision(NONE, skip)
-        body, _ = api.get(f"compare/{before}...{after}")
+        # Main moved while the PR waited (often a release PR's changelog). The merged
+        # PR's head passed, so classify only what main holds beyond that head; a
+        # squash or rebase merge has no such ancestry and still yields the PR's diff.
+        if passed_head:
+            print(f"Main moved since PR head {passed_head} passed; classifying only that difference.")
+        body, _ = api.get(f"compare/{passed_head or before}...{after}")
         raw = body.get("files", [])
         if len(raw) >= 300:
             return Decision(STANDARD, "300+ files changed (compare API limit)")

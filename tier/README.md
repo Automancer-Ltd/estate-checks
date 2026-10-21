@@ -10,7 +10,7 @@ rules, not a model: the same change always gets the same answer.
 
 | Tier | When | The repo runs |
 |---|---|---|
-| `none` | every changed file is documentation that no code reads, **or** a push to the default branch whose tree is exactly what the merged PR's run passed | nothing but the gate |
+| `none` | every changed file is documentation that no code reads, **or** a push to the default branch whose tree is exactly what the merged PR's run passed, or differs from the PR's passed head only by such documentation | nothing but the gate |
 | `core` | at most `small-max-files` non-doc files and `small-max-lines` changed lines, nothing that always needs the full suite, and at most `core-max-tests` test files naming the changed code | its quick job: lint, typecheck, and the tests in `direct-tests` (target under 2–3 minutes) |
 | `standard` | everything else, any other event, and any classification failure | its normal CI |
 
@@ -115,8 +115,11 @@ configure checkout in other jobs or change history depth or tier selection.
   tree its passing run recorded (a `ci-tier` notice annotation on this job,
   `tested-tree=<sha>`), and compares it with the pushed commit's tree. Equal
   trees mean the exact code on main already passed, so the tier is `none`.
-  Otherwise the before...after diff is classified like a PR, which keeps the
-  merge-skew check (two PRs that pass alone but clash together).
+  Otherwise main moved while the PR waited, and only what main holds beyond
+  the PR's passed head is classified like a PR: a release PR's changelog alone
+  gives `none`, while code another PR merged meanwhile keeps the merge-skew
+  check (two PRs that pass alone but clash together). With no passing PR run,
+  or a squash or rebase merge, that difference is the PR's whole diff.
 - **Anything else** (`workflow_dispatch`, `schedule`, a force push, a new
   branch, an API error, a failed checkout, more than 300 changed files on a
   push): `standard`. The action never fails the job.
