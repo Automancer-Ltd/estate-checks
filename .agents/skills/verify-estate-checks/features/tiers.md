@@ -19,8 +19,8 @@ steps against a synthetic PR file API and committed checkout.
 - `tested-push`: identical recorded and pushed Git trees return `none`.
 - `merge-skew`: main moved by code since the PR's head passed, so that code
   joins the PR's large diff and returns `standard`.
-- `docs-moved`: main moved only by a changelog since the PR's head passed,
-  so the push returns `none`.
+- `docs-moved`: the pushed tree differs from the tree the PR run passed only by
+  a changelog, so the push returns `none`.
 - `db-test`: a one-line change to `workers/test_cost_postgres.py` returns
   `standard`, because a quick job may let database tests skip (t4647).
 - `api-failure` and `dispatch`: API errors and manual events return `standard`.
@@ -33,6 +33,14 @@ actually passes (default `ci tier`), not its job's real name. Confirm the old
 code reproduces each live run's `Tier:` line before trusting the new one. On
 21 Oct 2026 a replay that passed ops' real job name hid the bug v1.7.11 fixed:
 six consumers' pushes all ran `standard` because their job is not `ci tier`.
+Pass every tier input the consumer sets, `docs-include` too: without auto's
+`plans/**`, its prompts/ drift was not documentation and t6084 looked unfixed.
+
+For a doc-reader change, replay PRs too: `pulls/<n>/files` through `classify`,
+then `_scan` on a `git archive` of the PR head. Then diff `docs_read_by_code`
+old against new over every consumer clone under
+`/opt/automancer/worktrees/ci-shape/`. Read the line behind each pair the change
+drops or adds (v1.7.12: 49 dropped, none added).
 
 Proof: the public outputs in `results.json`. Gotcha: the consumer chooses the
 commands for each tier. The classifier's output alone does not run that suite.

@@ -302,6 +302,8 @@ A merge updates source; consumers execute `v1`. Before changing it:
 3. Record the old `v1` SHA with `git ls-remote --tags origin refs/tags/v1`.
 4. Create the next semver tag at that candidate, publish its GitHub release, and
    move `v1` to it. Read both remote tags back and require the candidate SHA.
+   The estate git guard refuses the forced tag push; set
+   `GIT_GUARD_ALLOW=1 GIT_GUARD_REASON='<release, rollback SHA>'` on that push only.
 5. Invoke `v1` in the disposable consumer once more. A release is verified when
    the runner downloaded the new SHA and its checks behaved correctly.
 
