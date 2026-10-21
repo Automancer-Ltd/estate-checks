@@ -11,6 +11,8 @@ import shutil
 import subprocess
 import tempfile
 import threading
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
@@ -218,12 +220,7 @@ def verify(evidence: Path) -> None:
                     "none" if name in ("tested-push", "docs-moved") else "standard"), outputs
                 results.append({"journey": name, "outputs": outputs})
 
-            for name, bad, strict in [("bounded", False, False), ("warn", True, False),
-                                       ("strict", True, True), ("unavailable", False, False),
-                                       ("strict-unavailable", False, True),
-                                       ("baseline-unresolvable", False, False),
-                                       ("strict-baseline-unresolvable", False, True),
-                                       ("excluded-server", True, False), ("skip-workflows", True, False)]:
+            def scan_case(name: str, bad: bool, strict: bool) -> dict[str, Any]:
                 dest = evidence / name
                 dest.mkdir()
                 work = scratch / name
@@ -273,7 +270,7 @@ def verify(evidence: Path) -> None:
                         for rule in ("fetch-no-signal", "python-requests-no-timeout",
                                      "shell-curl-no-timeout", "workflow-curl-no-timeout"):
                             assert rule in logs, (rule, logs)
-                results.append({"journey": name, "exit": code, "outputs": outputs})
+                return {"journey": name, "exit": code, "outputs": outputs}
 
             # Install-timeout gate (tracker t4456): an unbounded package install
             # fails the run by default; a bounded one passes; the opt-out skips.
@@ -283,9 +280,7 @@ def verify(evidence: Path) -> None:
             bounded_step = "        timeout-minutes: 3\n"
             install_step = ("        run: |\n          set -euo pipefail\n"
                             "          pip install --quiet requests\n          npm ci\n")
-            for name, bounded, skip in [("install-unbounded", False, False),
-                                        ("install-bounded", True, False),
-                                        ("install-skip", False, True)]:
+            def install_case(name: str, bounded: bool, skip: bool) -> dict[str, Any]:
                 dest = evidence / name
                 dest.mkdir()
                 work = scratch / name
@@ -311,7 +306,25 @@ def verify(evidence: Path) -> None:
                     assert int(outputs["install-timeout-count"]) == 0, outputs
                     if skip:
                         assert "Install timeout check skipped" in logs, logs
-                results.append({"journey": name, "exit": code, "outputs": outputs})
+                return {"journey": name, "exit": code, "outputs": outputs}
+
+            # Each scanner journey is its own consumer and Semgrep process; two at a
+            # time keep CI's verdict under a billed minute on a 2-vCPU runner.
+            scan_jobs: list[tuple[Callable[[str, bool, bool], dict[str, Any]], str, bool, bool]] = [
+                (scan_case, "bounded", False, False), (scan_case, "warn", True, False),
+                (scan_case, "strict", True, True), (scan_case, "unavailable", False, False),
+                (scan_case, "strict-unavailable", False, True),
+                (scan_case, "baseline-unresolvable", False, False),
+                (scan_case, "strict-baseline-unresolvable", False, True),
+                (scan_case, "excluded-server", True, False), (scan_case, "skip-workflows", True, False),
+                (install_case, "install-unbounded", False, False),
+                (install_case, "install-bounded", True, False),
+                (install_case, "install-skip", False, True)]
+            def run_job(job: tuple[Callable[[str, bool, bool], dict[str, Any]], str, bool, bool]) -> dict[str, Any]:
+                return job[0](job[1], job[2], job[3])
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                results.extend(pool.map(run_job, scan_jobs))
     finally:
         server.shutdown()
         server.server_close()
