@@ -138,7 +138,12 @@ configure checkout in other jobs or change history depth or tier selection.
   head joins it, which keeps the merge-skew check (two PRs that pass alone but
   clash together). With no passing PR run, the before...after diff is
   classified alone.
-- **Anything else** (`workflow_dispatch`, `schedule`, a force push, a new
+- **Dispatch on the default branch** (`deploy-on-main`'s `dispatch-ci`, for a
+  merge no PR run proved): as a push, from the newest first-parent ancestor
+  that CI proved (a passing push or dispatch run of this workflow, or a tree a
+  PR run passed), so any unproved commit in between joins the diff. No proven
+  ancestor in 20 commits gives `standard`.
+- **Anything else** (`workflow_dispatch` on another branch, `schedule`, a force push, a new
   branch, an API error, a failed checkout, more than 300 changed files on a
   push): `standard`. The action never fails the job.
 
