@@ -28,10 +28,11 @@ steps against a synthetic PR file API and committed checkout.
 Real data: before releasing a push-path change, replay a consumer's recent push
 SHAs through `decide` read-only, with `Api(<api url>, <owner/repo>, <token from
 GH_TOKEN, never argv>)`, the consumer's tier inputs as `Config.from_inputs`,
-`before` = the commit's first parent and the consumer's tier job name. Compare
-old and new tiers per SHA. On 21 Oct 2026 this showed that 25 of ops' last 30
-pushes were exactly-tested trees the live runs had sent to `standard`
-(v1.7.9).
+`before` = the commit's first parent, and the `job-name` the consumer's workflow
+actually passes (default `ci tier`), not its job's real name. Confirm the old
+code reproduces each live run's `Tier:` line before trusting the new one. On
+21 Oct 2026 a replay that passed ops' real job name hid the bug v1.7.11 fixed:
+six consumers' pushes all ran `standard` because their job is not `ci tier`.
 
 Proof: the public outputs in `results.json`. Gotcha: the consumer chooses the
 commands for each tier. The classifier's output alone does not run that suite.
