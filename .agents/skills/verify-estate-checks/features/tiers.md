@@ -23,7 +23,9 @@ steps against a synthetic PR file API and committed checkout.
   a changelog, so the push returns `none`.
 - `db-test`: a one-line change to `workers/test_cost_postgres.py` returns
   `standard`, because a quick job may let database tests skip (t4647).
-- `api-failure` and `dispatch`: API errors and manual events return `standard`.
+- `api-failure` and `dispatch`: API errors and manual events off the default
+  branch return `standard`. A dispatch on the default branch classifies from its
+  newest proven ancestor (`DispatchOnMain` in `tier/test_classify.py`).
 
 Real data: before releasing a push-path change, replay a consumer's recent push
 SHAs through `decide` read-only, with `Api(<api url>, <owner/repo>, <token from
