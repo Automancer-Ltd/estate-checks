@@ -40,4 +40,4 @@ procedure in `README.md` before changing tags. Preserve green exact-head CI and
 prove the candidate in a disposable consumer PR before moving `v1`. Keep the
 previous tag SHA for rollback. `deploy.json` names the live revision read.
 
-Last verified: 2026-10-17 on auto-vps.
+Last verified: 2026-10-21 on auto-vps.

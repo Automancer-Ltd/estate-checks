@@ -386,7 +386,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         allowlist = load_allowlist(args.allowlist)
     except AllowlistError as exc:
-        allowlist = frozenset()
+        allowlist: frozenset[tuple[str, str, str]] = frozenset()
         could_not_run = 1
         print(f"::error title={TITLES['check-could-not-run']}::{_escape(str(exc))}")
         print(f"install-timeout check could not run: {exc}", file=sys.stderr)
