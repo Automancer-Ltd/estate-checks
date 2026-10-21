@@ -111,7 +111,9 @@ configure checkout in other jobs or change history depth or tier selection.
 
 - **Pull request:** the PR's file list from the REST API. A rename counts as
   both its old and new path, so moving code into `docs/` is not docs.
-- **Push to the default branch:** the action finds the merged PR, reads the
+- **Push to the default branch:** the action finds the merged PR head (a merge
+  commit's second parent; for a squash or rebase merge, GitHub's link from the
+  commit to its PR, which can lag the merge by seconds), reads the
   tree its passing run recorded (a `ci-tier` notice annotation on this job,
   `tested-tree=<sha>`), and compares it with the pushed commit's tree. Equal
   trees mean the exact code on main already passed, so the tier is `none`.

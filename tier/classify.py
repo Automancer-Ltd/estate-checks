@@ -379,6 +379,18 @@ def tree_of(api: Api, sha: str) -> str:
     return body["tree"]["sha"]
 
 
+def merged_head(api: Api, after: str, parents: list[str]) -> tuple[str, str] | None:
+    """(head SHA, label) of what this push merged. A merge commit's second parent is the
+    PR head; GitHub links a commit to its PR only some seconds after the merge, so that
+    lookup, which a push run makes at once, is the fallback for squash and rebase merges
+    (automancer-ops PR #972, 21 Oct 2026: an exact tested tree ran the full suite)."""
+    if len(parents) == 2:
+        return parents[1], f"merged head {parents[1][:12]}"
+    pulls, _ = api.get(f"commits/{after}/pulls")
+    merged = [p for p in pulls if p.get("merged_at") and p.get("merge_commit_sha") == after]
+    return (merged[0]["head"]["sha"], f"PR #{merged[0]['number']}") if merged else None
+
+
 def tested_tree_of_run(api: Api, run_id: int, job_name: str) -> str | None:
     """The tree a passing PR run recorded in its tier job's notice annotation.
 
@@ -399,19 +411,18 @@ def tested_tree_of_run(api: Api, run_id: int, job_name: str) -> str | None:
 def passed_pr(api: Api, after: str, workflow_path: str, job_name: str) -> tuple[str | None, str | None]:
     """(skip reason, passed head): the reason when the pushed tree is exactly a tree a PR
     run passed; otherwise the head SHA of the merged PR if a PR run of it passed."""
-    pulls, _ = api.get(f"commits/{after}/pulls")
-    merged = [p for p in pulls if p.get("merged_at") and p.get("merge_commit_sha") == after]
-    if not merged:
+    commit, _ = api.get(f"git/commits/{after}")
+    found = merged_head(api, after, [p["sha"] for p in commit.get("parents", [])])
+    if not found:
         return None, None
-    pr = merged[0]
+    head, label = found
     workflow = os.path.basename(workflow_path)
-    runs = api.paged(f"actions/workflows/{workflow}/runs?event=pull_request&status=success&head_sha={pr['head']['sha']}",
+    runs = api.paged(f"actions/workflows/{workflow}/runs?event=pull_request&status=success&head_sha={head}",
                      key="workflow_runs", limit=20)
-    pushed_tree = tree_of(api, after)
     for run in runs:
-        if tested_tree_of_run(api, run["id"], job_name) == pushed_tree:
-            return f"main's tree is exactly what PR #{pr['number']} passed in run {run['id']}", None
-    return None, pr["head"]["sha"] if runs else None
+        if tested_tree_of_run(api, run["id"], job_name) == commit["tree"]["sha"]:
+            return f"main's tree is exactly what {label} passed in run {run['id']}", None
+    return None, head if runs else None
 
 
 @dataclass
