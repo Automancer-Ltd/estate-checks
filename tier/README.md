@@ -38,8 +38,15 @@ Most repositories pass no inputs. The built-in lists live in `classify.py`:
   changed one, passed core with them skipped, and reddened master (t4647).
 - **Who reads the docs is detected, not declared.** When the answer depends on
   documentation, the action checks out the code and searches every non-doc file
-  for each changed doc's path, its distinctive file name, or its folder in
-  quotes (`"docs/reports"`). Any hit makes that doc count as code. A test that
+  for each changed doc's path or distinctive file name used as a path, or its
+  folder in quotes (`"docs/reports"`). Used as a path means a quoted literal or
+  its end (`"docs/x.md"`, `root / 'x.md'`), or in shell, YAML and plain lists an
+  argument that ends the line or meets an operator, a flag or another path
+  (`grep -q x docs/x.md`). Prose that names a doc inside a string does not count,
+  nor do comments, `find -not -name`, `--exclude` or systemd `Documentation=`. A
+  common name (`AGENTS.md`, `README.md`) counts only with nothing but the root or
+  a variable folder before it (`join(root, "README.md")`, `"$ROOT/AGENTS.md"`).
+  Any hit makes that doc count as code. A test that
   starts reading a doc next month is picked up without anyone editing a list.
   Records are data, not readers: `.jsonl`, `.ndjson`, `.csv`, `.tsv` and `.log`
   files are skipped, and a `.json` or `.txt` file counts only when it names the
