@@ -41,6 +41,9 @@ Most repositories pass no inputs. The built-in lists live in `classify.py`:
   for each changed doc's path, its distinctive file name, or its folder in
   quotes (`"docs/reports"`). Any hit makes that doc count as code. A test that
   starts reading a doc next month is picked up without anyone editing a list.
+  Records are data, not readers: `.jsonl`, `.ndjson`, `.csv`, `.tsv` and `.log`
+  files are skipped, and a `.json` or `.txt` file counts only when it names the
+  doc's full path, as a manifest a program loads does (t6067).
 
 **The quick job's tests are named, not traced.** For a core change the action
 lists the test files that refer to a changed file by folder and name
@@ -74,7 +77,10 @@ Inputs exist for the exceptions:
 ## Sparse checkout for asset-heavy repositories
 
 The optional checkout inputs pass directly to `actions/checkout` when the
-classifier needs to scan files. Defaults preserve a full checkout.
+classifier needs to scan files. Defaults preserve a full checkout, so a
+repository whose tree is mostly assets or records should set `sparse-checkout`:
+automancer-auto's unsparse tier checkout fetched 975 MB and took about 40 s on
+every push that needed a scan (t6067).
 
 | Input | Default | Meaning |
 |---|---|---|
