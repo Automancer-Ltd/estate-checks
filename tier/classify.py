@@ -379,6 +379,18 @@ def tree_of(api: Api, sha: str) -> str:
     return body["tree"]["sha"]
 
 
+def merged_head(api: Api, after: str, parents: list[str]) -> tuple[str, str] | None:
+    """(head SHA, label) of what this push merged. A merge commit's second parent is the
+    PR head; GitHub links a commit to its PR only some seconds after the merge, so that
+    lookup, which a push run makes at once, is the fallback for squash and rebase merges
+    (automancer-ops PR #972, 21 Oct 2026: an exact tested tree ran the full suite)."""
+    if len(parents) == 2:
+        return parents[1], f"merged head {parents[1][:12]}"
+    pulls, _ = api.get(f"commits/{after}/pulls")
+    merged = [p for p in pulls if p.get("merged_at") and p.get("merge_commit_sha") == after]
+    return (merged[0]["head"]["sha"], f"PR #{merged[0]['number']}") if merged else None
+
+
 def tested_tree_of_run(api: Api, run_id: int, job_name: str) -> str | None:
     """The tree a passing PR run recorded in its tier job's notice annotation.
 
@@ -396,21 +408,21 @@ def tested_tree_of_run(api: Api, run_id: int, job_name: str) -> str | None:
     return None
 
 
-def already_tested(api: Api, after: str, workflow_path: str, job_name: str) -> str | None:
-    """If the pushed tree is exactly a tree a PR run passed, say which PR."""
-    pulls, _ = api.get(f"commits/{after}/pulls")
-    merged = [p for p in pulls if p.get("merged_at") and p.get("merge_commit_sha") == after]
-    if not merged:
-        return None
-    pr = merged[0]
+def passed_pr(api: Api, after: str, workflow_path: str, job_name: str) -> tuple[str | None, str | None]:
+    """(skip reason, passed head): the reason when the pushed tree is exactly a tree a PR
+    run passed; otherwise the head SHA of the merged PR if a PR run of it passed."""
+    commit, _ = api.get(f"git/commits/{after}")
+    found = merged_head(api, after, [p["sha"] for p in commit.get("parents", [])])
+    if not found:
+        return None, None
+    head, label = found
     workflow = os.path.basename(workflow_path)
-    runs = api.paged(f"actions/workflows/{workflow}/runs?event=pull_request&status=success&head_sha={pr['head']['sha']}",
+    runs = api.paged(f"actions/workflows/{workflow}/runs?event=pull_request&status=success&head_sha={head}",
                      key="workflow_runs", limit=20)
-    pushed_tree = tree_of(api, after)
     for run in runs:
-        if tested_tree_of_run(api, run["id"], job_name) == pushed_tree:
-            return f"main's tree is exactly what PR #{pr['number']} passed in run {run['id']}"
-    return None
+        if tested_tree_of_run(api, run["id"], job_name) == commit["tree"]["sha"]:
+            return f"main's tree is exactly what {label} passed in run {run['id']}", None
+    return None, head if runs else None
 
 
 @dataclass
@@ -434,11 +446,23 @@ def decide(event_name: str, event: dict[str, Any], cfg: Config, api: Api, github
         before, after = event.get("before", ""), event.get("after", "")
         if not before or set(before) == {"0"} or event.get("forced"):
             return Decision(STANDARD, "new or force-pushed branch")
-        skip = already_tested(api, after, workflow_path, job_name)
+        skip, passed_head = passed_pr(api, after, workflow_path, job_name)
         if skip:
             return Decision(NONE, skip)
         body, _ = api.get(f"compare/{before}...{after}")
         raw = body.get("files", [])
+        if passed_head:
+            # Main moved while the PR waited, often by a release PR's changelog. What
+            # main holds beyond the passed head is all that went untested: docs alone
+            # need nothing, and code joins the PR's diff so a merge skew still runs.
+            # Only a merge commit keeps the head as an ancestor; squash and rebase
+            # merges classify the PR's diff alone, as before.
+            moved, _ = api.get(f"compare/{passed_head}...{after}")
+            extra: list[dict[str, Any]] = moved.get("files", []) if moved.get("status") == "ahead" else []
+            if extra and len(extra) < 300 and classify(_files(extra), cfg)[0] == NONE:
+                return Decision(NONE, f"only documentation moved main since PR head {passed_head} passed",
+                                files=_files(extra))
+            raw = raw + [f for f in extra if f["filename"] not in {g["filename"] for g in raw}]
         if len(raw) >= 300:
             return Decision(STANDARD, "300+ files changed (compare API limit)")
         files = _files(raw)

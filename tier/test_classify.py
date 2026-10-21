@@ -310,7 +310,8 @@ class PullRequest(unittest.TestCase):
 PUSH = {"ref": "refs/heads/main", "before": BEFORE, "after": AFTER, "repository": {"default_branch": "main"}}
 
 
-def push_routes(pushed_tree, compare_files):
+def push_routes(pushed_tree, compare_files, moved_files=None):
+    """compare_files is the merged PR's diff; moved_files is what main holds beyond its passed head."""
     return {
         f"commits/{AFTER}/pulls": [{"number": 7, "merged_at": "x", "merge_commit_sha": AFTER, "head": {"sha": HEAD}}],
         "actions/workflows/ci.yml/runs": {"workflow_runs": [{"id": 99}]},
@@ -318,6 +319,8 @@ def push_routes(pushed_tree, compare_files):
         "check-runs/5/annotations": [{"title": "ci-tier", "message": f"tier=standard tested-tree={TESTED_TREE}"}],
         f"git/commits/{AFTER}": {"tree": {"sha": pushed_tree}},
         f"compare/{BEFORE}...{AFTER}": {"files": compare_files},
+        f"compare/{HEAD}...{AFTER}": {"status": "ahead",
+                                      "files": compare_files if moved_files is None else moved_files},
     }
 
 
@@ -338,8 +341,21 @@ class PushToMain(unittest.TestCase):
                   "check-runs/6/annotations": [], **routes}
         self.assertEqual(run_main("push", PUSH, routes)["tier"], NONE)
 
-    def test_runs_the_change_tier_when_main_moved_since_the_pr_run(self):
-        self.assertEqual(run_main("push", PUSH, push_routes(OTHER_TREE, self.code))["tier"], STANDARD)
+    def test_code_that_moved_main_since_the_pr_passed_runs_its_tier(self):
+        routes = push_routes(OTHER_TREE, [changed("CHANGELOG.md")], moved_files=self.code)
+        self.assertEqual(run_main("push", PUSH, routes, {"CHANGELOG.md": ""})["tier"], STANDARD)
+
+    def test_only_docs_moved_main_since_the_pr_passed_runs_nothing(self):
+        # ops, 21 Oct 2026: 21 of 44 push runs re-ran the full suite because a release
+        # PR's changelog landed between the PR's passing run and its merge.
+        routes = push_routes(OTHER_TREE, self.code, moved_files=[changed("CHANGELOG.md", 4)])
+        self.assertEqual(run_main("push", PUSH, routes, {"CHANGELOG.md": ""})["tier"], NONE)
+
+    def test_without_a_passing_pr_run_the_whole_pr_diff_is_classified(self):
+        routes = push_routes(OTHER_TREE, self.code, moved_files=[changed("CHANGELOG.md", 4)])
+        routes["actions/workflows/ci.yml/runs"] = {"workflow_runs": []}
+        self.assertEqual(run_main("push", PUSH, routes, {"CHANGELOG.md": ""})["tier"], STANDARD)
+
 
     def test_docs_merge_after_main_moved_still_runs_nothing(self):
         routes = push_routes(OTHER_TREE, [changed("README.md", 3)])

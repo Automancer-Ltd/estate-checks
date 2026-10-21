@@ -182,7 +182,7 @@ def verify(evidence: Path) -> None:
                 assert json.loads(outputs["direct-tests"]) == tests, (name, outputs)
                 results.append({"journey": name, "outputs": outputs})
 
-            for name in ("tested-push", "merge-skew", "api-failure", "dispatch"):
+            for name in ("tested-push", "merge-skew", "docs-moved", "api-failure", "dispatch"):
                 dest = evidence / name
                 dest.mkdir()
                 work = scratch / name
@@ -191,15 +191,20 @@ def verify(evidence: Path) -> None:
                 event.write_text(json.dumps({"ref": "refs/heads/main", "before": "b" * 40,
                     "after": "a" * 40, "repository": {"default_branch": "main"},
                     "pull_request": {"number": 3, "labels": []}}))
+                # A GitHub merge commit names the PR head as its second parent. No commit-to-PR
+                # route: GitHub fills that in only seconds after a merge, so it must not be needed.
                 server.routes = {
-                    "commits/" + "a" * 40 + "/pulls": [{"number": 7, "merged_at": "now",
-                        "merge_commit_sha": "a" * 40, "head": {"sha": "h" * 40}}],
                     "actions/workflows/ci.yml/runs": {"workflow_runs": [{"id": 99}]},
                     "actions/runs/99/jobs": {"jobs": [{"name": "ci tier", "id": 5}]},
                     "check-runs/5/annotations": [{"title": "ci-tier", "message": "tested-tree=" + TREE}],
-                    "git/commits/" + "a" * 40: {"tree": {"sha": TREE if name == "tested-push" else "2" * 40}},
+                    "git/commits/" + "a" * 40: {"tree": {"sha": TREE if name == "tested-push" else "2" * 40},
+                                                "parents": [{"sha": "b" * 40}, {"sha": "h" * 40}]},
                     "compare/" + "b" * 40 + "..." + "a" * 40: {"files": [
                         {"filename": "src/cost.ts", "additions": 51, "deletions": 0}]},
+                    # What main holds beyond the PR's passed head: code, or only a changelog.
+                    "compare/" + "h" * 40 + "..." + "a" * 40: {"status": "ahead", "files": [
+                        {"filename": "CHANGELOG.md" if name == "docs-moved" else "src/cost.ts",
+                         "additions": 51, "deletions": 0}]},
                 }
                 env = {**os.environ, "GITHUB_EVENT_NAME": "workflow_dispatch" if name == "dispatch" else
                        "pull_request" if name == "api-failure" else "push", "GITHUB_SHA": TREE,
@@ -209,7 +214,8 @@ def verify(evidence: Path) -> None:
                        "GITHUB_WORKSPACE": str(work), "RUNNER_TEMP": str(dest),
                        "GITHUB_STEP_SUMMARY": str(dest / "summary.md")}
                 code, outputs = action(ROOT / "tier/action.yml", work, dest, env)
-                assert code == 0 and outputs["tier"] == ("none" if name == "tested-push" else "standard"), outputs
+                assert code == 0 and outputs["tier"] == (
+                    "none" if name in ("tested-push", "docs-moved") else "standard"), outputs
                 results.append({"journey": name, "outputs": outputs})
 
             for name, bad, strict in [("bounded", False, False), ("warn", True, False),

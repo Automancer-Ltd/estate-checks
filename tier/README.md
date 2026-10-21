@@ -10,7 +10,7 @@ rules, not a model: the same change always gets the same answer.
 
 | Tier | When | The repo runs |
 |---|---|---|
-| `none` | every changed file is documentation that no code reads, **or** a push to the default branch whose tree is exactly what the merged PR's run passed | nothing but the gate |
+| `none` | every changed file is documentation that no code reads, **or** a push to the default branch whose tree is exactly what the merged PR's run passed, or differs from the PR's passed head only by such documentation | nothing but the gate |
 | `core` | at most `small-max-files` non-doc files and `small-max-lines` changed lines, nothing that always needs the full suite, and at most `core-max-tests` test files naming the changed code | its quick job: lint, typecheck, and the tests in `direct-tests` (target under 2–3 minutes) |
 | `standard` | everything else, any other event, and any classification failure | its normal CI |
 
@@ -111,12 +111,18 @@ configure checkout in other jobs or change history depth or tier selection.
 
 - **Pull request:** the PR's file list from the REST API. A rename counts as
   both its old and new path, so moving code into `docs/` is not docs.
-- **Push to the default branch:** the action finds the merged PR, reads the
+- **Push to the default branch:** the action finds the merged PR head (a merge
+  commit's second parent; for a squash or rebase merge, GitHub's link from the
+  commit to its PR, which can lag the merge by seconds), reads the
   tree its passing run recorded (a `ci-tier` notice annotation on this job,
   `tested-tree=<sha>`), and compares it with the pushed commit's tree. Equal
   trees mean the exact code on main already passed, so the tier is `none`.
-  Otherwise the before...after diff is classified like a PR, which keeps the
-  merge-skew check (two PRs that pass alone but clash together).
+  Otherwise main moved while the PR waited. When the PR's head passed and is an
+  ancestor of the merge, what main holds beyond that head is all that went
+  untested: documentation alone (a release PR's changelog) gives `none`, and
+  code joins the PR's diff, classified like a PR, which keeps the merge-skew
+  check (two PRs that pass alone but clash together). With no passing PR run,
+  or a squash or rebase merge, the before...after diff is classified alone.
 - **Anything else** (`workflow_dispatch`, `schedule`, a force push, a new
   branch, an API error, a failed checkout, more than 300 changed files on a
   push): `standard`. The action never fails the job.
