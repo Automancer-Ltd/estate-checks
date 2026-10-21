@@ -355,6 +355,13 @@ class PushToMain(unittest.TestCase):
                   "check-runs/6/annotations": [], **routes}
         self.assertEqual(run_main("push", PUSH, routes)["tier"], NONE)
 
+    def test_skips_when_the_tier_job_has_another_name(self):
+        # chief-of-staff's one job is "ci gate" and passes no job-name; its exactly
+        # tested pushes ran the full suite (run 39654364400, 21 Oct 2026).
+        routes = push_routes(TESTED_TREE, self.code)
+        routes["actions/runs/99/jobs"] = {"jobs": [{"name": "ci gate", "id": 5}]}
+        self.assertEqual(run_main("push", PUSH, routes)["tier"], NONE)
+
     def test_code_that_moved_main_since_the_pr_passed_runs_its_tier(self):
         routes = push_routes(OTHER_TREE, [changed("CHANGELOG.md")], moved_files=self.code)
         self.assertEqual(run_main("push", PUSH, routes, {"CHANGELOG.md": ""})["tier"], STANDARD)

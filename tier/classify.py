@@ -403,11 +403,11 @@ def tested_tree_of_run(api: Api, run_id: int, job_name: str) -> str | None:
     """The tree a passing PR run recorded in its tier job's notice annotation.
 
     All attempts: re-running failed jobs copies the tier job into the new attempt
-    without its annotations, so the record lives on the attempt that ran it."""
+    without its annotations, so the record lives on the attempt that ran it. Any
+    job's notice counts, `job_name` first: six consumers' one-job workflows renamed
+    the job without passing `job-name`, so every push re-ran the full suite (21 Oct 2026)."""
     jobs = api.paged(f"actions/runs/{run_id}/jobs?filter=all", key="jobs")
-    for job in jobs:
-        if job.get("name") != job_name:
-            continue
+    for job in sorted(jobs, key=lambda j: j.get("name") != job_name):
         notes = api.paged(f"check-runs/{job['id']}/annotations")
         for note in notes:
             m = re.search(r"tested-tree=([0-9a-f]{40})", note.get("message", ""))

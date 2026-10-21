@@ -42,7 +42,7 @@ inputs:
     required: false
     default: ''
   job-name:
-    description: "The display name of the job calling this action. On a push to the default branch it is how the action finds what the merged PR's run tested."
+    description: "The display name of the job calling this action. On a push to the default branch the action reads this job's tested-tree notice first, then any other job's."
     required: false
     default: 'ci tier'
   token:

@@ -135,8 +135,9 @@ configure checkout in other jobs or change history depth or tier selection.
 
 ## Wiring a workflow
 
-Use one job when the complete verdict is under about five minutes. Its name must
-match `job-name` so a later push can find the tested-tree annotation. Scanners run
+Use one job when the complete verdict is under about five minutes. A later push
+finds the PR run's tested-tree notice on any of its jobs, the one named `job-name`
+first, so passing `job-name` only saves API reads. Scanners run
 even on documentation-only changes. The job has no dependency or job-level
 condition, so it always reports and can be the required context.
 
