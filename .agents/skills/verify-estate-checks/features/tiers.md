@@ -25,5 +25,13 @@ steps against a synthetic PR file API and committed checkout.
   `standard`, because a quick job may let database tests skip (t4647).
 - `api-failure` and `dispatch`: API errors and manual events return `standard`.
 
+Real data: before releasing a push-path change, replay a consumer's recent push
+SHAs through `decide` read-only, with `Api(<api url>, <owner/repo>, <token from
+GH_TOKEN, never argv>)`, the consumer's tier inputs as `Config.from_inputs`,
+`before` = the commit's first parent and the consumer's tier job name. Compare
+old and new tiers per SHA. On 21 Oct 2026 this showed that 25 of ops' last 30
+pushes were exactly-tested trees the live runs had sent to `standard`
+(v1.7.9).
+
 Proof: the public outputs in `results.json`. Gotcha: the consumer chooses the
 commands for each tier. The classifier's output alone does not run that suite.
