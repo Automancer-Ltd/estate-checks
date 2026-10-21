@@ -319,7 +319,8 @@ def push_routes(pushed_tree, compare_files, moved_files=None):
         "check-runs/5/annotations": [{"title": "ci-tier", "message": f"tier=standard tested-tree={TESTED_TREE}"}],
         f"git/commits/{AFTER}": {"tree": {"sha": pushed_tree}},
         f"compare/{BEFORE}...{AFTER}": {"files": compare_files},
-        f"compare/{HEAD}...{AFTER}": {"files": compare_files if moved_files is None else moved_files},
+        f"compare/{HEAD}...{AFTER}": {"status": "ahead",
+                                      "files": compare_files if moved_files is None else moved_files},
     }
 
 
@@ -354,6 +355,7 @@ class PushToMain(unittest.TestCase):
         routes = push_routes(OTHER_TREE, self.code, moved_files=[changed("CHANGELOG.md", 4)])
         routes["actions/workflows/ci.yml/runs"] = {"workflow_runs": []}
         self.assertEqual(run_main("push", PUSH, routes, {"CHANGELOG.md": ""})["tier"], STANDARD)
+
 
     def test_docs_merge_after_main_moved_still_runs_nothing(self):
         routes = push_routes(OTHER_TREE, [changed("README.md", 3)])

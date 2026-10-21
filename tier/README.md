@@ -115,11 +115,12 @@ configure checkout in other jobs or change history depth or tier selection.
   tree its passing run recorded (a `ci-tier` notice annotation on this job,
   `tested-tree=<sha>`), and compares it with the pushed commit's tree. Equal
   trees mean the exact code on main already passed, so the tier is `none`.
-  Otherwise main moved while the PR waited, and only what main holds beyond
-  the PR's passed head is classified like a PR: a release PR's changelog alone
-  gives `none`, while code another PR merged meanwhile keeps the merge-skew
+  Otherwise main moved while the PR waited. When the PR's head passed and is an
+  ancestor of the merge, what main holds beyond that head is all that went
+  untested: documentation alone (a release PR's changelog) gives `none`, and
+  code joins the PR's diff, classified like a PR, which keeps the merge-skew
   check (two PRs that pass alone but clash together). With no passing PR run,
-  or a squash or rebase merge, that difference is the PR's whole diff.
+  or a squash or rebase merge, the before...after diff is classified alone.
 - **Anything else** (`workflow_dispatch`, `schedule`, a force push, a new
   branch, an API error, a failed checkout, more than 300 changed files on a
   push): `standard`. The action never fails the job.

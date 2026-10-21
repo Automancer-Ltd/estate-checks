@@ -438,13 +438,20 @@ def decide(event_name: str, event: dict[str, Any], cfg: Config, api: Api, github
         skip, passed_head = passed_pr(api, after, workflow_path, job_name)
         if skip:
             return Decision(NONE, skip)
-        # Main moved while the PR waited (often a release PR's changelog). The merged
-        # PR's head passed, so classify only what main holds beyond that head; a
-        # squash or rebase merge has no such ancestry and still yields the PR's diff.
-        if passed_head:
-            print(f"Main moved since PR head {passed_head} passed; classifying only that difference.")
-        body, _ = api.get(f"compare/{passed_head or before}...{after}")
+        body, _ = api.get(f"compare/{before}...{after}")
         raw = body.get("files", [])
+        if passed_head:
+            # Main moved while the PR waited, often by a release PR's changelog. What
+            # main holds beyond the passed head is all that went untested: docs alone
+            # need nothing, and code joins the PR's diff so a merge skew still runs.
+            # Only a merge commit keeps the head as an ancestor; squash and rebase
+            # merges classify the PR's diff alone, as before.
+            moved, _ = api.get(f"compare/{passed_head}...{after}")
+            extra: list[dict[str, Any]] = moved.get("files", []) if moved.get("status") == "ahead" else []
+            if extra and len(extra) < 300 and classify(_files(extra), cfg)[0] == NONE:
+                return Decision(NONE, f"only documentation moved main since PR head {passed_head} passed",
+                                files=_files(extra))
+            raw = raw + [f for f in extra if f["filename"] not in {g["filename"] for g in raw}]
         if len(raw) >= 300:
             return Decision(STANDARD, "300+ files changed (compare API limit)")
         files = _files(raw)

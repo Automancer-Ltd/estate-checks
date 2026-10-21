@@ -201,7 +201,7 @@ def verify(evidence: Path) -> None:
                     "compare/" + "b" * 40 + "..." + "a" * 40: {"files": [
                         {"filename": "src/cost.ts", "additions": 51, "deletions": 0}]},
                     # What main holds beyond the PR's passed head: code, or only a changelog.
-                    "compare/" + "h" * 40 + "..." + "a" * 40: {"files": [
+                    "compare/" + "h" * 40 + "..." + "a" * 40: {"status": "ahead", "files": [
                         {"filename": "CHANGELOG.md" if name == "docs-moved" else "src/cost.ts",
                          "additions": 51, "deletions": 0}]},
                 }
