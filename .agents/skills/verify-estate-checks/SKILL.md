@@ -17,6 +17,9 @@ checkq -- uv tool run --python 3.12 --from semgrep==1.178.0 --with PyYAML python
 ```
 
 Use a new evidence directory on a repeat; the driver refuses to overwrite one.
+If every scan journey says `Semgrep failed with exit code 2` and a direct `semgrep scan
+--baseline-commit` prints `io_uring_queue_init: Cannot allocate memory`, the host refused
+io_uring: prefix the command with `EIO_BACKEND=posix` (auto-vps, 22 Oct 2026).
 The command uses an isolated cached tool environment. It leaves the host's
 Semgrep installation untouched. In CI the same command runs without `checkq`.
 

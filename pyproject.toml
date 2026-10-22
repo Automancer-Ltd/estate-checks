@@ -11,6 +11,6 @@ dev = ["basedpyright==1.40.2", "ruff==0.14.2", "types-PyYAML>=6,<7"]
 extend-exclude = ["rules"]
 
 [tool.basedpyright]
-include = ["tier/classify.py", "scripts/generate-summary.py", "scripts/workflow-standards.py", "scripts/install-timeouts.py", "scripts/verify-estate-checks.py"]
+include = ["tier/classify.py", "scripts/generate-summary.py", "scripts/workflow-standards.py", "scripts/install-timeouts.py", "scripts/workflow_yaml.py", "scripts/verify-estate-checks.py"]
 typeCheckingMode = "strict"
 pythonVersion = "3.11"

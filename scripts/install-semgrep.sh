@@ -6,8 +6,7 @@
 # until the kernel gives up minutes later, so each attempt runs under timeout(1) and is retried.
 #
 # Usage: install-semgrep.sh <version>
-# Env: SEMGREP_INSTALL_ATTEMPTS (3), SEMGREP_INSTALL_TIMEOUT seconds per attempt (120),
-#      SEMGREP_INSTALL_COMMAND (test hook: replaces the installer; run with bash -c).
+# Env: SEMGREP_INSTALL_ATTEMPTS (3), SEMGREP_INSTALL_TIMEOUT seconds per attempt (120).
 set -euo pipefail
 
 version="${1:?usage: install-semgrep.sh <version>}"
@@ -20,9 +19,7 @@ export UV_HTTP_TIMEOUT=30
 export PIP_DEFAULT_TIMEOUT=15 PIP_RETRIES=1
 
 install_once() {
-  if [ -n "${SEMGREP_INSTALL_COMMAND:-}" ]; then
-    bash -c "$SEMGREP_INSTALL_COMMAND"
-  elif command -v uv >/dev/null 2>&1; then
+  if command -v uv >/dev/null 2>&1; then
     uv tool install --force "semgrep==$version"
   elif command -v pipx >/dev/null 2>&1; then
     pipx install --force "semgrep==$version"

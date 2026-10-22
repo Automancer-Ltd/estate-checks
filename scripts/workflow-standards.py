@@ -24,8 +24,7 @@ when it finds something — a style violation in a workflow must not block a pul
 request. A workflow that cannot be parsed is reported the same way: a warning,
 because a check that could not run must never look like a clean result.
 
-Parsing is ``yaml.compose`` rather than ``yaml.safe_load`` so each finding can
-carry the line of the key at fault. Standard library plus PyYAML.
+Reading and the finding type live in ``workflow_yaml``. Standard library plus PyYAML.
 """
 from __future__ import annotations
 
@@ -34,14 +33,15 @@ import fnmatch
 import os
 import re
 import sys
-from types import ModuleType
 from typing import TYPE_CHECKING
+
+import workflow_yaml
+from workflow_yaml import Finding, escape, find, items, load_yaml, workflow_files
 
 if TYPE_CHECKING:
     from yaml.nodes import Node
 
 TIMEOUT_CAP_MINUTES = 30
-DEFAULT_WORKFLOWS_DIR = ".github/workflows"
 # Personal repositories run on GitHub-hosted runners (ci-standards, rule 4).
 PERSONAL_OWNERS = {"Waseemilyas"}
 HOSTED_LABEL = re.compile(r"^(ubuntu|macos|windows|blacksmith)-")
@@ -57,48 +57,6 @@ TITLES = {
     "workflow-schedule-trigger": "Workflow declares a schedule trigger",
     "workflow-unparsable": "Workflow could not be checked",
 }
-
-
-class Finding:
-    """One mechanical rule breach, with the position to annotate."""
-
-    __slots__ = ("rule", "path", "line", "message")
-
-    def __init__(self, rule: str, path: str, line: int, message: str) -> None:
-        self.rule = rule
-        self.path = path
-        self.line = line
-        self.message = message
-
-    def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return f"Finding({self.rule!r}, {self.path!r}, {self.line}, {self.message!r})"
-
-
-def _load_yaml() -> ModuleType | None:
-    """Return the yaml module, or None when PyYAML is not importable."""
-    try:
-        import yaml  # noqa: PLC0415 - optional at import time on purpose
-    except Exception:  # pragma: no cover - depends on the runner image
-        return None
-    return yaml
-
-
-def _items(node: Node | None) -> list[tuple[str, Node, int]]:
-    """(key text, value node, key line) for a mapping node, else []."""
-    from yaml.nodes import MappingNode, ScalarNode
-
-    if not isinstance(node, MappingNode):
-        return []
-    return [(key.value, value, key.start_mark.line + 1)
-            for key, value in node.value if isinstance(key, ScalarNode)]
-
-
-def _find(node: Node | None, name: str) -> tuple[Node | None, int]:
-    """The (value node, key line) of a mapping key, else (None, 1)."""
-    for key, value, line in _items(node):
-        if key == name:
-            return value, line
-    return None, 1
 
 
 def _scalars(node: Node | None) -> list[str]:
@@ -117,17 +75,17 @@ def _job_label(key: str) -> str:
 
 
 def _check_jobs(doc: Node, path: str, owner: str, findings: list[Finding]) -> None:
-    jobs, _jobs_line = _find(doc, "jobs")
+    jobs, _jobs_line = find(doc, "jobs")
     if jobs is None:
         return
-    for job_key, job, job_line in _items(jobs):
-        uses, _uses_line = _find(job, "uses")
+    for job_key, job, job_line in items(jobs):
+        uses, _uses_line = find(job, "uses")
         if uses is not None:
             # A reusable-workflow caller job cannot declare ``timeout-minutes``
             # or ``runs-on`` — workflow syntax bans both keys there — and the
             # called workflow bounds its own jobs, so neither rule applies.
             continue
-        timeout, timeout_line = _find(job, "timeout-minutes")
+        timeout, timeout_line = find(job, "timeout-minutes")
         if timeout is None:
             findings.append(
                 Finding(
@@ -154,7 +112,7 @@ def _check_jobs(doc: Node, path: str, owner: str, findings: list[Finding]) -> No
                     )
                 )
 
-        runs_on, runs_line = _find(job, "runs-on")
+        runs_on, runs_line = find(job, "runs-on")
         if runs_on is None or not owner or owner in PERSONAL_OWNERS:
             continue
         values = _scalars(runs_on)
@@ -175,7 +133,7 @@ def _check_jobs(doc: Node, path: str, owner: str, findings: list[Finding]) -> No
 
 
 def _check_concurrency(doc: Node, path: str, findings: list[Finding]) -> None:
-    concurrency, line = _find(doc, "concurrency")
+    concurrency, line = find(doc, "concurrency")
     if concurrency is None:
         findings.append(
             Finding(
@@ -190,7 +148,7 @@ def _check_concurrency(doc: Node, path: str, findings: list[Finding]) -> None:
             )
         )
         return
-    group, group_line = _find(concurrency, "group")
+    group, group_line = find(concurrency, "group")
     if group is not None:
         if not _scalars(group) or not _scalars(group)[0].strip():
             findings.append(
@@ -219,13 +177,13 @@ def _check_concurrency(doc: Node, path: str, findings: list[Finding]) -> None:
 def _check_push(doc: Node, path: str, default_branch: str, findings: list[Finding]) -> None:
     from yaml.nodes import MappingNode
 
-    triggers, _line = _find(doc, "on")
+    triggers, _line = find(doc, "on")
     if triggers is None:
         return
     event_names = []
     if isinstance(triggers, MappingNode):
-        event_names = [key for key, _value, _line in _items(triggers)]
-        push, push_line = _find(triggers, "push")
+        event_names = [key for key, _value, _line in items(triggers)]
+        push, push_line = find(triggers, "push")
     else:
         event_names = _scalars(triggers)
         push, push_line = (triggers, triggers.start_mark.line + 1) if "push" in event_names else (None, 1)
@@ -242,7 +200,7 @@ def _check_push(doc: Node, path: str, default_branch: str, findings: list[Findin
             )
         )
         return
-    keys = [key for key, _value, _line in _items(push)]
+    keys = [key for key, _value, _line in items(push)]
     has_branches = "branches" in keys or "branches-ignore" in keys
     has_tags = "tags" in keys or "tags-ignore" in keys
     if not has_branches:
@@ -260,7 +218,7 @@ def _check_push(doc: Node, path: str, default_branch: str, findings: list[Findin
         return
     if not default_branch:
         return
-    branches_node, branches_line = _find(push, "branches")
+    branches_node, branches_line = find(push, "branches")
     branches = _scalars(branches_node)
     if not branches:
         return  # branches-ignore, which this check does not judge
@@ -282,7 +240,7 @@ def _schedule_line(triggers: Node | None) -> int | None:
     from yaml.nodes import MappingNode, ScalarNode, SequenceNode
 
     if isinstance(triggers, MappingNode):
-        node, line = _find(triggers, "schedule")
+        node, line = find(triggers, "schedule")
         return line if node is not None else None
     if isinstance(triggers, SequenceNode):
         for child in triggers.value:
@@ -295,11 +253,7 @@ def _schedule_line(triggers: Node | None) -> int | None:
 
 
 def _check_schedule(doc: Node, path: str, findings: list[Finding]) -> None:
-    triggers, _line = _find(doc, "on")
-    # PyYAML 1.1 can tag a bare ``on`` key as boolean true. The key text is still
-    # ``on`` under compose; if a resolver ever rewrites it, read that key too.
-    if triggers is None:
-        triggers, _line = _find(doc, "true")
+    triggers, _line = find(doc, "on")
     line = _schedule_line(triggers)
     if line is None:
         return
@@ -319,7 +273,7 @@ def check_workflow(
     default_branch: str,
 ) -> list[Finding]:
     """Every finding for one workflow file, in file order."""
-    yaml = _load_yaml()
+    yaml = load_yaml()
     if yaml is None:
         return [
             Finding(
@@ -363,46 +317,14 @@ def check_workflow(
     return findings
 
 
-def _workflow_files(directory: str) -> list[str]:
-    if not os.path.isdir(directory):
-        return []
-    names = sorted(os.listdir(directory))
-    return [
-        os.path.join(directory, name)
-        for name in names
-        if name.endswith((".yml", ".yaml")) and os.path.isfile(os.path.join(directory, name))
-    ]
-
-
-def scan(
-    root: str,
-    workflows_dir: str,
-    owner: str,
-    default_branch: str,
-) -> list[Finding]:
-    findings: list[Finding] = []
-    for path in _workflow_files(workflows_dir):
-        try:
-            with open(path, "r", encoding="utf-8", errors="replace") as handle:
-                text = handle.read()
-        except OSError as exc:
-            findings.append(
-                Finding("workflow-unparsable", os.path.relpath(path, root), 1, f"Unreadable: {exc}")
-            )
-            continue
-        relative = os.path.relpath(path, root)
-        findings.extend(check_workflow(relative, text, owner, default_branch))
-    return findings
-
-
-def _escape(message: str) -> str:
-    return message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+def scan(root: str, workflows_dir: str, owner: str, default_branch: str) -> list[Finding]:
+    return workflow_yaml.scan(root, workflows_dir, lambda path, text: check_workflow(path, text, owner, default_branch))
 
 
 def emit_annotations(findings: list[Finding]) -> None:
     for finding in findings:
         title = TITLES.get(finding.rule, finding.rule)
-        print(f"::warning file={finding.path},line={finding.line},title={title}::{_escape(finding.message)}")
+        print(f"::warning file={finding.path},line={finding.line},title={title}::{escape(finding.message)}")
 
 
 def emit_summary(findings: list[Finding], summary_path: str | None) -> None:
@@ -436,33 +358,18 @@ def main(argv: list[str] | None = None) -> int:
         description="Warn about ci-standards workflow rules in this repo's workflows."
     )
     parser.add_argument("--root", default=os.environ.get("GITHUB_WORKSPACE") or os.getcwd())
-    parser.add_argument("--workflows-dir", default=None)
     parser.add_argument("--owner", default=os.environ.get("GITHUB_REPOSITORY_OWNER", ""))
     parser.add_argument("--default-branch", default="")
-    parser.add_argument("--json", action="store_true", help="print findings as JSON and nothing else")
     parser.add_argument("--summary", default=os.environ.get("GITHUB_STEP_SUMMARY"))
     args = parser.parse_args(argv)
     root = os.path.abspath(args.root)
-    workflows_dir = args.workflows_dir or os.path.join(root, DEFAULT_WORKFLOWS_DIR)
+    workflows_dir = os.path.join(root, workflow_yaml.WORKFLOWS_DIR)
     findings = scan(root, workflows_dir, args.owner, args.default_branch)
-    if args.json:
-        import json  # noqa: PLC0415
-
-        print(
-            json.dumps(
-                [
-                    {"rule": f.rule, "path": f.path, "line": f.line, "message": f.message}
-                    for f in findings
-                ],
-                indent=2,
-            )
-        )
-        return 0
     emit_annotations(findings)
     emit_summary(findings, args.summary)
     print(
         f"Workflow standards: {len(findings)} warning(s) across "
-        f"{len(_workflow_files(workflows_dir))} workflow file(s)."
+        f"{len(workflow_files(workflows_dir))} workflow file(s)."
     )
     # Machine-readable count for the action step's output.
     print(f"workflow-standards-count={len(findings)}")

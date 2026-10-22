@@ -154,8 +154,9 @@ list ships empty; every row needs a reason a reviewer can check.
 
 ### Precision decisions
 
-- **A bounded command is not an install.** A line wrapped in coreutils `timeout 300 …` (or
-  `timeout 5m …`) is bounded and passes without touching the workflow.
+- **A bounded command is not an install.** A command wrapped in coreutils `timeout 300 …`
+  (or `timeout 5m …`, `timeout -k 5 300 …`, `timeout --signal=KILL 5m …`, or `timeout 300 \`
+  with the install on the next line) is bounded and passes without touching the workflow.
 - **Comments and echoes are not commands.** `# pip install …` and `echo "npm install …"` do not
   run an install, so they are not findings.
 - **Reusable-workflow caller jobs are exempt.** Workflow syntax bans `timeout-minutes` on a job
