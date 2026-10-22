@@ -7,7 +7,7 @@ Last verified: 2026-10-21 on auto-vps
 
 ## North star
 
-Give repositories a shared CI check for outside network and subprocess calls that have no time limit, for the mechanical workflow rules of `ci-standards`, and for workflow steps that install packages with no `timeout-minutes`, so all three are reported by a guard rather than remembered from prose.
+Give repositories a shared CI check for outside network and subprocess calls that have no time limit, for the mechanical workflow rules of `testing` (CI area), and for workflow steps that install packages with no `timeout-minutes`, so all three are reported by a guard rather than remembered from prose.
 
 ## Key principles
 
@@ -39,7 +39,7 @@ Give repositories a shared CI check for outside network and subprocess calls tha
 
 ### Workflow standards check (`scripts/workflow-standards.py`, `scripts/test-workflow-standards.py`; YAML reading shared in `scripts/workflow_yaml.py`)
 
-- What it does: Reads the caller's `.github/workflows/*.yml` and annotates breaches of `ci-standards` rules 1-4 — a job with no `timeout-minutes` or above the 10-minute cap, a workflow with no concurrency group, a `push:` without a branch filter or filtered away from the default branch, an organisation job whose `runs-on` is a hosted label literal instead of `vars.CI_RUNNER`, and an `on: schedule` trigger (`workflow-schedule-trigger`). A schedule has no exception (ci-standards, 21 Oct 2026). Warning only: it exits 0 with findings, and a workflow it cannot parse is reported as a warning rather than a clean result. Parses with `yaml.compose` so each annotation carries the line of the key at fault. The tests pin every rule against a fixture that must be flagged and one that must not.
+- What it does: Reads the caller's `.github/workflows/*.yml` and annotates breaches of `testing` CI rules 1-4 — a job with no `timeout-minutes` or above the 10-minute cap, a workflow with no concurrency group, a `push:` without a branch filter or filtered away from the default branch, an organisation job whose `runs-on` is a hosted label literal instead of `vars.CI_RUNNER`, and an `on: schedule` trigger (`workflow-schedule-trigger`). A schedule has no exception (ci-standards, 21 Oct 2026). Warning only: it exits 0 with findings, and a workflow it cannot parse is reported as a warning rather than a clean result. Parses with `yaml.compose` so each annotation carries the line of the key at fault. The tests pin every rule against a fixture that must be flagged and one that must not.
 - State: built
 - Shaped by: The `ci-standards` rules, precision-over-recall (personal repositories, expressions, self-hosted labels, tag-only pushes and 5-10 minute timeouts are deliberately not judged), and Waseem's 2026-09-27 warn-only decision. Contradiction 7 of `/opt/automancer/auto/plans/repo-shaping-2026-10-15.md`.
 

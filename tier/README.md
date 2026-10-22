@@ -196,4 +196,4 @@ jobs:
 
 A consumer must connect every tier to its actual commands; this snippet only
 shows action placement. CI structure, including the measured exception for
-parallel jobs and deploy workflows, lives in the estate's `ci-standards` skill.
+parallel jobs and deploy workflows, lives in the estate's `testing` skill (CI area).
