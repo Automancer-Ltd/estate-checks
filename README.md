@@ -299,7 +299,10 @@ A merge updates source; consumers execute `v1`. Before changing it:
 1. Confirm the candidate merge tree passed this repo's required `check` job.
 2. In an owned disposable consumer PR, pin both actions to the candidate SHA.
    Prove tier outputs and scanner annotations in the runner, then close the PR
-   unmerged. Keep its CI link in the release notes.
+   unmerged. Keep its CI link in the release notes. A consumer without a tier
+   step (inbox-labeller since its #36) needs one added in that PR, and its
+   workflow `permissions:` need `pull-requests`, `actions` and `checks: read`,
+   or the tier reads HTTP 403 and falls back to `standard` (inbox-labeller#37).
 3. Record the old `v1` SHA with `git ls-remote --tags origin refs/tags/v1`.
 4. Create the next semver tag at that candidate, publish its GitHub release, and
    move `v1` to it. Read both remote tags back and require the candidate SHA.
