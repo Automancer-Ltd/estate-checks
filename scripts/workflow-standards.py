@@ -6,7 +6,7 @@ belong in a guard, not in 27 KB of incident prose. This check reads
 ``.github/workflows/*.yml`` in the repository it runs in and annotates:
 
 1. ``job-missing-timeout`` / ``job-timeout-over-cap`` — every job declares
-   ``timeout-minutes``, and none declares more than the 30-minute cap. A job
+   ``timeout-minutes``, and none declares more than the 10-minute cap. A job
    that only calls a reusable workflow (``uses:``) is exempt: workflow syntax
    bans the key on a caller job, and the called workflow bounds its own jobs.
 2. ``workflow-missing-concurrency`` / ``workflow-concurrency-no-group`` — every
@@ -41,14 +41,14 @@ from workflow_yaml import Finding, escape, find, items, load_yaml, workflow_file
 if TYPE_CHECKING:
     from yaml.nodes import Node
 
-TIMEOUT_CAP_MINUTES = 30
+TIMEOUT_CAP_MINUTES = 10
 # Personal repositories run on GitHub-hosted runners (ci-standards, rule 4).
 PERSONAL_OWNERS = {"Waseemilyas"}
 HOSTED_LABEL = re.compile(r"^(ubuntu|macos|windows|blacksmith)-")
 
 TITLES = {
     "job-missing-timeout": "Job declares no timeout-minutes",
-    "job-timeout-over-cap": "Timeout above the 30-minute cap",
+    "job-timeout-over-cap": "Timeout above the 10-minute cap",
     "workflow-missing-concurrency": "Workflow declares no concurrency group",
     "workflow-concurrency-no-group": "Concurrency group is empty",
     "push-unfiltered": "push is not filtered to a branch",
@@ -93,7 +93,7 @@ def _check_jobs(doc: Node, path: str, owner: str, findings: list[Finding]) -> No
                     path,
                     job_line,
                     f"{_job_label(job_key)} declares no timeout-minutes. Add "
-                    "`timeout-minutes:` (at most 10 in routine CI, at most 30 in an "
+                    "`timeout-minutes:` (at most 5 in routine CI, at most 10 in an "
                     "extended suite); with none declared GitHub allows 360 minutes.",
                 )
             )

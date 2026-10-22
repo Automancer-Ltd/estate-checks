@@ -62,7 +62,7 @@ whatever `fail-on-findings` says for the unbounded-call scan.
 | Annotation | Rule | What is wrong |
 | --- | --- | --- |
 | `job-missing-timeout` | 1 | a job declares no `timeout-minutes` (GitHub's default is 360 minutes) |
-| `job-timeout-over-cap` | 1 | a job declares more than the 30-minute absolute cap |
+| `job-timeout-over-cap` | 1 | a job declares more than the 10-minute absolute cap |
 | `workflow-missing-concurrency` | 2 | a workflow declares no `concurrency:` group |
 | `workflow-concurrency-no-group` | 2 | a concurrency block carries no non-empty `group` |
 | `push-unfiltered` | 3 | `push:` carries no `branches`/`branches-ignore` filter, so every branch push bills the whole matrix twice |
@@ -71,7 +71,7 @@ whatever `fail-on-findings` says for the unbounded-call scan.
 | `workflow-schedule-trigger` | 3 | `on:` includes `schedule`, so the workflow runs on a timer. Checks run once per change, on the pull request |
 | `workflow-unparsable` | — | the workflow could not be parsed, so it was not checked (never a silent pass) |
 
-The two rules that need judgement stay in the skill, not here: the ten-minute budget is measured
+The two rules that need judgement stay in the skill, not here: the five-minute routine budget is measured
 over a whole run (this check only reads the declared limits), and a deploy scheduler keeping its own
 group with `cancel-in-progress: false` is correct while a test workflow needs the standard block.
 
@@ -81,8 +81,8 @@ What the check deliberately does not judge, because a warning that is wrong gets
   `ubuntu-latest` there is correct and is not reported. Every organisation repository is.
 - **Expressions and self-hosted labels.** `runs-on: ${{ matrix.os }}`, `runs-on: [self-hosted, linux]`
   and a literal that is not a hosted label are left alone; only a hosted-label literal is reported.
-- **Timeouts between 10 and 30 minutes.** Whether a workflow is an extended suite is not visible in
-  its YAML, so only the absence of a limit and a value above the 30-minute cap are reported.
+- **Timeouts between 5 and 10 minutes.** Whether a workflow is an extended suite is not visible in
+  its YAML, so only the absence of a limit and a value above the 10-minute cap are reported.
 - **`branches-ignore`, tag-only `push:`, and concurrency keys.** A `push:` with only `tags:` does not
   double-bill branch work, and a different group key may be right for a deploy workflow.
 - **The wrong-branch refinement needs the default branch.** It comes from the event payload; when it
