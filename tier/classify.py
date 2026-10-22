@@ -643,8 +643,8 @@ def main(argv: list[str], environ: Mapping[str, str] = os.environ,
 
     tier, reason = d.tier, d.reason
     print(f"Tier: {tier} — {reason}")
-    if d.tested_tree:
-        print(f"::notice title={NOTICE_TITLE}::tier={tier} tested-tree={d.tested_tree}")
+    # Every run records its tier: ci-proof.sh accepts a dispatch whose tier was none (t6378).
+    print(f"::notice title={NOTICE_TITLE}::tier={tier}" + (f" tested-tree={d.tested_tree}" if d.tested_tree else ""))
     # Existing paths only: a deleted file has nothing to lint or test.
     changed = sorted({f.path for f in d.files if f.status != "removed"})
     if out:
