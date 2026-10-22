@@ -145,6 +145,9 @@ def verify(evidence: Path) -> None:
                 ("full-path", common, "src/cost.ts", 1, {"full-paths": "src/**"}, [], "standard", []),
                 ("db-test", {"workers/test_cost_postgres.py": "def test_cost():\n    pass\n"},
                  "workers/test_cost_postgres.py", 1, {}, [], "standard", []),
+                ("test-setup", {"vite.config.ts": 'export default { test: { setupFiles: "./src/test/setup.ts" } };\n',
+                                "src/test/setup.ts": "export {};\n"},
+                 "src/test/setup.ts", 1, {}, [], "standard", []),
                 ("full-label", {"docs/guide.md": "Guide\n"}, "docs/guide.md", 1, {},
                  [{"name": "ci:full"}], "standard", []),
                 ("agent-skill-markdown", {

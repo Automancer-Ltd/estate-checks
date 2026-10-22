@@ -36,6 +36,13 @@ Most repositories pass no inputs. The built-in lists live in `classify.py`:
   `x.postgres.test.ts`, `x.db.test.ts`, `tests/db/`, `scripts/ci-postgres-tests.sh`)
   is `standard`, because a quick job may let database tests skip. KG PR #646
   changed one, passed core with them skipped, and reddened master (t4647).
+- **Test setup always runs the full suite.** Every test runs it, yet no test
+  names it, so core would find no tests and run lint alone. That covers pytest's
+  `conftest.py`, and any file a test-runner config (`*.config.*`,
+  `vitest.workspace.*`, `package.json`) names under `setupFiles`,
+  `setupFilesAfterEnv`, `globalSetup` or `globalTeardown`, such as
+  gdp-chorus's `src/test/setup.ts`. Consumers no longer need to list setup
+  folders in `full-paths`.
 - **Who reads the docs is detected, not declared.** When the answer depends on
   documentation, the action checks out the code and searches every non-doc file
   for each changed doc's path or distinctive file name used as a path, or its

@@ -57,7 +57,7 @@ Give repositories a shared CI check for outside network and subprocess calls tha
 
 ### CI tier action (`tier/`)
 
-- What it does: Classifies a pull request or default-branch push as `none`, `core` or `standard` from the changed files, docs and full-suite globs, and size limits; on a push it reuses the merged head's passing run (see `tier/README.md`, which owns every rule and input). Any failure resolves to `standard`. Estate and secret scans stay the consumer's unconditional steps.
+- What it does: Classifies a pull request or default-branch push as `none`, `core` or `standard` from the changed files, docs and full-suite globs, test setup a test-runner config names, and size limits; on a push it reuses the merged head's passing run (see `tier/README.md`, which owns every rule and input). Any failure resolves to `standard`. Estate and secret scans stay the consumer's unconditional steps.
 - State: built
 - Shaped by: Waseem's proportionate-CI decisions of 2026-10-03 (`auto/plans/ci-proportionate-2026-10-03.md`) and the cases in `tier/test_classify.py`.
 

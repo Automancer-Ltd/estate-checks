@@ -62,6 +62,7 @@ DEFAULT_FULL = [
     "**/tsconfig*.json", "**/jsconfig*.json", "**/*.config.js", "**/*.config.ts",
     "**/*.config.mjs", "**/*.config.cjs", "**/*.config.mts", "**/.eslintrc*", "**/.oxlintrc*",
     "**/biome.json", "**/biome.jsonc", "**/.prettierrc*", "**/Makefile", "**/justfile",
+    "**/conftest.py",
     "**/migrations/**", "**/*.sql", "**/schema.prisma", "**/schema.ts", "**/schema.js",
     "**/convex.json", "**/vercel.json", "**/wrangler.toml", "**/wrangler.json*",
     "**/netlify.toml", "**/render.yaml", "**/fly.toml",
@@ -79,6 +80,13 @@ DEFAULT_DB_TESTS = [
     "**/db/test/**", "**/db/tests/**", "**/db/__tests__/**", "**/tests/db/**", "**/test/db/**",
     "**/tests/postgres/**", "**/tests/database/**", "**/db-tests/**", "**/db_tests/**",
 ]
+# Test-runner config and the keys that name setup every test runs. No test names that
+# setup, so a change to it found no direct tests and ran core on lint alone: gdp-chorus's
+# vite.config.ts runs src/test/setup.ts; tallow and the ERP listed theirs in full-paths.
+RUNNER_CONFIG = re.compile(r"(?:^|/)(?:[\w.-]+\.config\.[cm]?[jt]s|vitest\.workspace\.[cm]?[jt]s|package\.json)$")
+SETUP_VALUE = re.compile(
+    r"""["']?\b(?:setupFiles|setupFilesAfterEnv|globalSetup|globalTeardown)["']?\s*:\s*(\[[^\]]*\]|["'`][^"'`]*["'`])""")
+STRING_LITERAL = re.compile(r"""["'`]([^"'`\s]+)["'`]""")
 # Names too common to mean "this file" when they appear in code.
 GENERIC_DOC_NAMES = {
     "readme.md", "changelog.md", "license.md", "contributing.md", "security.md",
@@ -216,6 +224,25 @@ def classify(files: list[ChangedFile], cfg: Config, labels: Iterable[str] = (),
     if len(code) <= cfg.small_max_files and lines <= cfg.small_max_lines:
         return CORE, f"small change: {len(code)} file(s), {lines} line(s)"
     return STANDARD, f"{len(code)} file(s), {lines} line(s) changed"
+
+
+def runner_setup(changed: list[str], root: str, tracked: list[str]) -> dict[str, str]:
+    """Map each changed file a test-runner config runs before every test onto that config."""
+    found: dict[str, str] = {}
+    for config in (t for t in tracked if RUNNER_CONFIG.search(t)):
+        try:
+            with open(os.path.join(root, config), encoding="utf-8", errors="replace") as fh:
+                text = fh.read(MAX_SCAN_BYTES)
+        except OSError:
+            continue
+        base = os.path.dirname(config)
+        for value in SETUP_VALUE.findall(text):
+            for literal in STRING_LITERAL.findall(value):
+                path = os.path.normpath(os.path.join(base, literal.removeprefix("<rootDir>/")))
+                for c in changed:
+                    if path in (c, os.path.splitext(c)[0]):
+                        found.setdefault(c, config)
+    return found
 
 
 # What may stand before a doc path code uses: a quoted literal or the end of one (`"docs/x.md"`, `root / 'x.md'`,
@@ -596,6 +623,11 @@ def _scan(state: dict[str, Any], cfg: Config, root: str) -> Decision:
     if read:
         reason += "; docs read by code: " + ", ".join(f"{d} ({by})" for d, by in sorted(read.items()))
     tests: list[str] = []
+    setup = runner_setup([f.path for f in files if f.status != "removed"], root, tracked) if tier == CORE else {}
+    if setup:
+        tier, reason = STANDARD, (f"{reason}, but " + "; ".join(
+            f"{path} is test setup that {config} runs before every test" for path, config in sorted(setup.items()))
+            + "; running the full suite")
     if tier == CORE:
         # Deleted and old renamed paths too: a test still importing one fails on main.
         paths = [p for f in files for p in _paths(f)]
