@@ -521,7 +521,7 @@ def decide(event_name: str, event: dict[str, Any], cfg: Config, api: Api, github
         before = proven_ancestor(api, github_sha, workflow_path, job_name, cfg)
         if not before:
             return Decision(STANDARD, "no proven commit in the last 20 on the default branch")
-        return since(api, before, github_sha, workflow_path, job_name, cfg)
+        return since(api, before, github_sha, workflow_path, job_name, cfg, before_proven=True)
     return Decision(STANDARD, f"event {event_name} always runs the full suite")
 
 
@@ -547,17 +547,20 @@ def proven_ancestor(api: Api, after: str, workflow_path: str, job_name: str, cfg
     return None
 
 
-def since(api: Api, before: str, after: str, workflow_path: str, job_name: str, cfg: Config) -> Decision:
-    """The tier for the default branch moving from proven `before` to `after`."""
+def since(api: Api, before: str, after: str, workflow_path: str, job_name: str, cfg: Config,
+          before_proven: bool = False) -> Decision:
+    """The tier for the default branch moving from `before` to `after`."""
     skip, passed_head = passed_pr(api, after, workflow_path, job_name, cfg)
     if skip:
         return skip
     body, _ = api.get(f"compare/{before}...{after}")
     raw = body.get("files", [])
-    if passed_head:
+    if passed_head and not (before_proven and classify(_files(raw), cfg)[0] == NONE):
         # Code moved main while the PR waited: it joins the PR's diff so a merge
         # skew still runs. Only a merge commit keeps the head as an ancestor;
-        # squash and rebase merges classify the PR's diff alone.
+        # squash and rebase merges classify the PR's diff alone. When CI proved
+        # `before` and only docs differ from it, there is no skew to run
+        # (rsbook1 run 39701578222). A push's `before` may be unproved, so it keeps the join.
         moved, _ = api.get(f"compare/{passed_head}...{after}")
         extra: list[dict[str, Any]] = moved.get("files", []) if moved.get("status") == "ahead" else []
         raw = raw + [f for f in extra if f["filename"] not in {g["filename"] for g in raw}]

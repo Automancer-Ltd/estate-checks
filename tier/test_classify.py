@@ -474,6 +474,16 @@ class DispatchOnMain(unittest.TestCase):
         routes[f"compare/{BEFORE}...{AFTER}"] = {"files": [changed("README.md", 3)]}
         self.assertEqual(run_main("workflow_dispatch", DISPATCH, routes, {"README.md": ""}, self.env)["tier"], STANDARD)
 
+    def test_docs_merge_of_a_passed_pr_skips_what_the_proven_parent_holds(self):
+        # rsbook1 run 39701578222: a CHANGELOG-only merge commit ran the full suite for
+        # ci.yml, which main gained while the PR waited and its proven parent already held.
+        routes = {f"actions/workflows/ci.yml/runs?status=success&head_sha={BEFORE}":
+                  {"workflow_runs": [{"id": 1, "event": "workflow_dispatch"}]},
+                  **push_routes(OTHER_TREE, [changed("CHANGELOG.md", 4)],
+                                moved_files=[changed(".github/workflows/ci.yml", 3)])}
+        routes[f"git/commits/{AFTER}"] = {"tree": {"sha": OTHER_TREE}, "parents": [{"sha": BEFORE}]}
+        self.assertEqual(run_main("workflow_dispatch", DISPATCH, routes, {"CHANGELOG.md": ""}, self.env)["tier"], NONE)
+
     def test_no_proven_ancestor_runs_the_full_suite(self):
         routes = dispatch_routes(BEFORE, [changed("README.md", 3)], proven=set())
         self.assertEqual(run_main("workflow_dispatch", DISPATCH, routes, {"README.md": ""}, self.env)["tier"], STANDARD)

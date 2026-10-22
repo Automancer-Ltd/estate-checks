@@ -141,8 +141,10 @@ configure checkout in other jobs or change history depth or tier selection.
 - **Dispatch on the default branch** (`deploy-on-main`'s `dispatch-ci`, for a
   merge no PR run proved): as a push, from the newest first-parent ancestor
   that CI proved (a passing push or dispatch run of this workflow, or a tree a
-  PR run passed), so any unproved commit in between joins the diff. No proven
-  ancestor in 20 commits gives `standard`.
+  PR run passed), so any unproved commit in between joins the diff. Because that
+  ancestor is proven, a merge whose diff from it is documentation alone gives
+  `none` without the code main gained while the PR waited. No proven ancestor in
+  20 commits gives `standard`.
 - **Anything else** (`workflow_dispatch` on another branch, `schedule`, a force push, a new
   branch, an API error, a failed checkout, more than 300 changed files on a
   push): `standard`. The action never fails the job.
