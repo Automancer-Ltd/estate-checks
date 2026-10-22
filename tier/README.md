@@ -179,7 +179,7 @@ jobs:
   check:
     name: check
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - id: tier
         uses: Automancer-Ltd/estate-checks/tier@v1

@@ -36,7 +36,7 @@ concurrency:
 jobs:
   build:
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - run: echo ok
 """
@@ -69,19 +69,19 @@ class CleanWorkflow(unittest.TestCase):
 
 class Timeouts(unittest.TestCase):
     def test_missing_timeout_is_reported_on_the_job_line(self):
-        text = CLEAN.replace("    timeout-minutes: 10\n", "")
+        text = CLEAN.replace("    timeout-minutes: 5\n", "")
         findings = run(text)
         self.assertEqual(rules(findings), ["job-missing-timeout"])
         self.assertEqual(findings[0].line, 14)  # the `build:` key
         self.assertIn("'build'", findings[0].message)
 
-    def test_ten_minutes_passes_and_thirty_passes(self):
-        self.assertEqual(run(CLEAN.replace("timeout-minutes: 10", "timeout-minutes: 30")), [])
+    def test_five_minutes_passes_and_ten_passes(self):
+        self.assertEqual(run(CLEAN.replace("timeout-minutes: 5", "timeout-minutes: 10")), [])
 
     def test_over_the_cap_is_reported(self):
-        findings = run(CLEAN.replace("timeout-minutes: 10", "timeout-minutes: 45"))
+        findings = run(CLEAN.replace("timeout-minutes: 5", "timeout-minutes: 15"))
         self.assertEqual(rules(findings), ["job-timeout-over-cap"])
-        self.assertIn("30-minute", findings[0].message)
+        self.assertIn("10-minute", findings[0].message)
 
     def test_reusable_workflow_caller_jobs_are_exempt(self):
         # Workflow syntax bans timeout-minutes (and runs-on) on a job that
@@ -89,7 +89,7 @@ class Timeouts(unittest.TestCase):
         # check must not demand a key the caller cannot declare.
         text = CLEAN.replace(
             "    runs-on: ${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}\n"
-            "    timeout-minutes: 10\n"
+            "    timeout-minutes: 5\n"
             "    steps:\n"
             "      - run: echo ok\n",
             "    uses: ./.github/workflows/reusable.yml\n    secrets: inherit\n",
@@ -103,7 +103,7 @@ class Timeouts(unittest.TestCase):
             "    runs-on: ${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}\n"
             "    steps:\n"
             "      - run: echo ok\n",
-            "    timeout-minutes: 10\n    uses: ./.github/workflows/reusable.yml\n",
+            "    timeout-minutes: 5\n    uses: ./.github/workflows/reusable.yml\n",
         )
         self.assertEqual(run(text), [])
 
@@ -176,7 +176,7 @@ class Precision(unittest.TestCase):
             self.assertEqual(ws.scan(tmp, os.path.join(tmp, ".github", "workflows"), ORG, "main"), [])
 
     def test_annotation_carries_file_and_line(self):
-        findings = run(CLEAN.replace("timeout-minutes: 10", "timeout-minutes: 45"))
+        findings = run(CLEAN.replace("timeout-minutes: 5", "timeout-minutes: 15"))
         self.assertEqual(
             (findings[0].path, findings[0].line), (".github/workflows/ci.yml", 16)
         )
@@ -197,7 +197,7 @@ concurrency:
 jobs:
   suite:
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - run: echo ok
 """
@@ -242,7 +242,7 @@ concurrency:
 jobs:
   a: &job
     runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - run: echo ok
   b: *job
