@@ -8,7 +8,7 @@ The check inspects code for **unbounded outside network and subprocess calls**â€
 
 The repository also ships [`tier`](tier/README.md), a second action that decides how much CI a change needs (none, core or standard) so docs-only changes and already-tested merges skip the suite.
 
-The same action runs a second, pure-Python check: **workflow standards**, the mechanical rules 1-4 of the `ci-standards` skill plus rule 3's ban on a `schedule` trigger, read from this repository's own `.github/workflows` and reported as inline annotations. See [Workflow standards](#workflow-standards-ci-standards-rules-1-4).
+The same action runs a second, pure-Python check: **workflow standards**, the mechanical rules 1-4 of the `testing` skill (CI area) plus rule 3's ban on a `schedule` trigger, read from this repository's own `.github/workflows` and reported as inline annotations. See [Workflow standards](#workflow-standards-testing-ci-rules-1-4).
 
 It runs a third check, **install timeouts**: a workflow step that installs packages must declare `timeout-minutes` on the step or its job, and an unbounded install fails the run. See [Install timeouts](#install-timeouts-workflow-steps-that-install-packages).
 
@@ -52,9 +52,9 @@ Rules are defined in [`rules/unbounded-calls.yml`](rules/unbounded-calls.yml) an
 
 ---
 
-## Workflow standards (ci-standards rules 1-4)
+## Workflow standards (`testing` CI rules 1-4)
 
-`ci-standards` states four structural rules. They are mechanical, so this repository carries them
+`testing` (CI area) states four structural rules. They are mechanical, so this repository carries them
 as a check instead of as prose: it reads the caller repository's own `.github/workflows/*.yml` and
 annotates every breach, **warn-only** (Waseem, 2026-09-27) â€” a finding never fails the job,
 whatever `fail-on-findings` says for the unbounded-call scan.
@@ -91,7 +91,7 @@ What the check deliberately does not judge, because a warning that is wrong gets
   not a timer. Dependabot's own `schedule:` in `.github/dependabot.yml` is not a workflow trigger
   and is not read.
 
-`on: schedule` has no exception: ci-standards bans scheduled CI in every repository (Waseem,
+`on: schedule` has no exception: `testing`'s CI rule bans scheduled CI in every repository (Waseem,
 21 Oct 2026), and a comment in the workflow does not silence the warning.
 
 Disable the check entirely on a repository that needs to deviate, and say why in that repository:
@@ -163,7 +163,7 @@ list ships empty; every row needs a reason a reviewer can check.
   that calls a reusable workflow; the callee bounds its own jobs.
 - **`uses:` steps install nothing.** Marketplace actions own their own time limits.
 - **Expressions count as declarations.** `timeout-minutes: ${{ matrix.minutes }}` declares a
-  limit its author chose; judging values is the ci-standards budget rule's business, not this
+  limit its author chose; judging values is the `testing` CI budget rule's business, not this
   check's.
 - **The command set is fixed.** `yarn`, `pnpm`, `cargo`, `uv sync` and friends are not scanned;
   adding a tool trades recall for false positives on every consumer, so it is a deliberate change
@@ -196,7 +196,7 @@ Under Automancer CI standards, **precision beats recall**: a check that produces
 4. **Low-Level Socket APIs**: Direct TCP/TLS socket connections via `net.connect` or `tls.connect` with custom event listeners are not parsed.
 
 For the workflow standards check the precision decisions are listed in
-[its own section](#workflow-standards-ci-standards-rules-1-4).
+[its own section](#workflow-standards-testing-ci-rules-1-4).
 
 ---
 
@@ -243,7 +243,7 @@ for docs-only changes. It needs full history for differential scanning:
 ```
 
 Keep the caller's existing required job. The scanner needs no job or gate of its
-own. CI trigger, runner and timeout rules live in the estate's `ci-standards` skill.
+own. CI trigger, runner and timeout rules live in the estate's `testing` skill (CI area).
 
 ### Action Inputs
 
@@ -251,7 +251,7 @@ own. CI trigger, runner and timeout rules live in the estate's `ci-standards` sk
 |---|---|---|
 | `baseline-commit` | Baseline commit SHA to diff against on pull requests. Auto-detected from `github.event.pull_request.base.sha` on PRs. | `""` |
 | `check-installs` | Set to `'false'` to skip the install-timeout gate (a step installing packages with no `timeout-minutes` on the step or its job fails the run; see [Install timeouts](#install-timeouts-workflow-steps-that-install-packages)). | `'true'` |
-| `check-workflows` | Set to `'false'` to skip the workflow standards warnings (ci-standards rules 1-4, warn-only). | `'true'` |
+| `check-workflows` | Set to `'false'` to skip the workflow standards warnings (`testing` CI rules 1-4, warn-only). | `'true'` |
 | `exclude-paths` | Comma- or newline-separated paths or glob patterns to exclude from scanning (e.g. browser UI folders). | `""` |
 | `exclude-test-paths` | Comma- or newline-separated test paths or globs to exclude (set to empty to disable default test exclusions). | `'*.test.*, *_test.py, tests/**, __tests__/**'` |
 | `fail-on-findings` | `false` (default): warnings only. `true`: findings and "could not run" fail the job. `auto` is a legacy alias for `false`. | `false` |
