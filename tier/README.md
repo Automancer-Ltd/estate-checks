@@ -144,7 +144,10 @@ configure checkout in other jobs or change history depth or tier selection.
   PR run passed), so any unproved commit in between joins the diff. Because that
   ancestor is proven, a merge whose diff from it is documentation alone gives
   `none` without the code main gained while the PR waited. No proven ancestor in
-  20 commits gives `standard`.
+  20 commits gives `standard`. Every run records its tier in a `ci-tier` notice
+  (`tier=<tier>`, plus `tested-tree=` on a PR); automancer-ops `ci-proof.sh`
+  accepts a dispatch whose record reads `tier=none` as deploy proof, because only
+  tier and gate run then (t6378).
 - **Anything else** (`workflow_dispatch` on another branch, `schedule`, a force push, a new
   branch, an API error, a failed checkout, more than 300 changed files on a
   push): `standard`. The action never fails the job.
