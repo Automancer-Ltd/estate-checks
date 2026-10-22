@@ -548,7 +548,7 @@ def decide(event_name: str, event: dict[str, Any], cfg: Config, api: Api, github
         before = proven_ancestor(api, github_sha, workflow_path, job_name, cfg)
         if not before:
             return Decision(STANDARD, "no proven commit in the last 20 on the default branch")
-        return since(api, before, github_sha, workflow_path, job_name, cfg)
+        return since(api, before, github_sha, workflow_path, job_name, cfg, before_proven=True)
     return Decision(STANDARD, f"event {event_name} always runs the full suite")
 
 
@@ -568,23 +568,30 @@ def proven_ancestor(api: Api, after: str, workflow_path: str, job_name: str, cfg
         sha = parents[0]["sha"]
         runs = api.paged(f"actions/workflows/{workflow}/runs?status=success&head_sha={sha}",
                          key="workflow_runs", limit=20)
-        if any(r.get("event") in ("push", "workflow_dispatch") for r in runs) \
-                or passed_pr(api, sha, workflow_path, job_name, cfg)[0]:
+        if any(r.get("event") in ("push", "workflow_dispatch") for r in runs):
+            return sha
+        # Only an exact tested tree: a docs-only difference has had no check for code
+        # reading those docs, and this commit's own run may have failed on one.
+        skip = passed_pr(api, sha, workflow_path, job_name, cfg)[0]
+        if skip and not skip.files:
             return sha
     return None
 
 
-def since(api: Api, before: str, after: str, workflow_path: str, job_name: str, cfg: Config) -> Decision:
-    """The tier for the default branch moving from proven `before` to `after`."""
+def since(api: Api, before: str, after: str, workflow_path: str, job_name: str, cfg: Config,
+          before_proven: bool = False) -> Decision:
+    """The tier for the default branch moving from `before` to `after`."""
     skip, passed_head = passed_pr(api, after, workflow_path, job_name, cfg)
     if skip:
         return skip
     body, _ = api.get(f"compare/{before}...{after}")
     raw = body.get("files", [])
-    if passed_head:
+    if passed_head and not (before_proven and classify(_files(raw), cfg)[0] == NONE):
         # Code moved main while the PR waited: it joins the PR's diff so a merge
         # skew still runs. Only a merge commit keeps the head as an ancestor;
-        # squash and rebase merges classify the PR's diff alone.
+        # squash and rebase merges classify the PR's diff alone. When CI proved
+        # `before` and only docs differ from it, there is no skew to run
+        # (rsbook1 run 39701578222). A push's `before` may be unproved, so it keeps the join.
         moved, _ = api.get(f"compare/{passed_head}...{after}")
         extra: list[dict[str, Any]] = moved.get("files", []) if moved.get("status") == "ahead" else []
         raw = raw + [f for f in extra if f["filename"] not in {g["filename"] for g in raw}]
@@ -622,10 +629,10 @@ def _scan(state: dict[str, Any], cfg: Config, root: str) -> Decision:
             f"{path} is test setup that {config} runs before every test" for path, config in sorted(setup.items()))
             + "; running the full suite")
     if tier == CORE:
-        convex = [p for f in files for p in _paths(f) if p.startswith("convex/")]
-        tests = direct_tests([f.path for f in files if f.status != "removed"] + convex,
-                             tracked, cfg.test_globs, root)
-        unmatched = [p for p in convex if not direct_tests([p], tracked, cfg.test_globs, root)]
+        # Deleted and old renamed paths too: a test still importing one fails on main.
+        paths = [p for f in files for p in _paths(f)]
+        tests = direct_tests(paths, tracked, cfg.test_globs, root)
+        unmatched = [p for p in paths if p.startswith("convex/") and not direct_tests([p], tracked, cfg.test_globs, root)]
         if unmatched:
             tier, reason = STANDARD, (f"{reason}, but no test names Convex file(s): {', '.join(unmatched)}; "
                                       "running the full suite")
@@ -670,10 +677,11 @@ def main(argv: list[str], environ: Mapping[str, str] = os.environ,
         d = Decision(STANDARD, f"could not classify ({type(exc).__name__}: {exc}); running the full suite")
         print(f"::warning title={NOTICE_TITLE}::{d.reason}")
 
-    tier, reason = d.tier, d.reason
+    # One line: a file name may hold a line break, and each output line sets a value.
+    tier, reason = d.tier, " ".join(d.reason.splitlines())
     print(f"Tier: {tier} — {reason}")
-    if d.tested_tree:
-        print(f"::notice title={NOTICE_TITLE}::tier={tier} tested-tree={d.tested_tree}")
+    # Every run records its tier: ci-proof.sh accepts a dispatch whose tier was none (t6378).
+    print(f"::notice title={NOTICE_TITLE}::tier={tier}" + (f" tested-tree={d.tested_tree}" if d.tested_tree else ""))
     # Existing paths only: a deleted file has nothing to lint or test.
     changed = sorted({f.path for f in d.files if f.status != "removed"})
     if out:

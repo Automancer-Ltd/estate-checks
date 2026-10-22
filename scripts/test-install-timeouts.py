@@ -89,8 +89,17 @@ class BoundedWorkflow(unittest.TestCase):
     def test_coreutils_timeout_bounds_the_command(self):
         text = UNBOUNDED_PIP.replace("pip install requests", "timeout 300 pip install requests")
         self.assertEqual(run(text), [])
-        text = UNBOUNDED_PIP.replace("pip install requests", "timeout 5m pip install requests")
-        self.assertEqual(run(text), [])
+        for bounded in ("timeout 5m pip install requests", "timeout -k 5 300 pip install requests",
+                        "timeout --signal=KILL 5m pip install requests", "timeout -s KILL 300 pip install requests",
+                        "timeout 300 \\\n            pip install requests"):
+            with self.subTest(bounded=bounded):
+                self.assertEqual(run(UNBOUNDED_PIP.replace("pip install requests", bounded)), [])
+
+    def test_a_continued_unbounded_install_is_reported_on_its_first_line(self):
+        findings = run(UNBOUNDED_PIP.replace("pip install requests", "pip install \\\n            requests"))
+        self.assertEqual([(f.rule, f.line) for f in findings], [("install-unbounded", 10)])
+        findings = run(UNBOUNDED_PIP.replace("pip install requests", "# see \\\n          pip install requests"))
+        self.assertEqual([(f.rule, f.line) for f in findings], [("install-unbounded", 11)])
 
     def test_comments_and_echo_are_not_commands(self):
         text = UNBOUNDED_PIP.replace(

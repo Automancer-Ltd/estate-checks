@@ -23,8 +23,7 @@ Automancer-Ltd/estate-checks, not a comment in the caller. A check that could
 not run — PyYAML missing, a workflow that will not parse, a malformed
 allowlist row — fails loudly rather than passing silently.
 
-Parsing is ``yaml.compose`` so each finding carries the line of the install
-command. Standard library plus PyYAML.
+Reading and the finding type live in ``workflow_yaml``. Standard library plus PyYAML.
 """
 from __future__ import annotations
 
@@ -32,13 +31,14 @@ import argparse
 import os
 import re
 import sys
-from types import ModuleType
 from typing import TYPE_CHECKING
+
+import workflow_yaml
+from workflow_yaml import Finding, escape, find, items, load_yaml, workflow_files
 
 if TYPE_CHECKING:
     from yaml.nodes import Node
 
-DEFAULT_WORKFLOWS_DIR = ".github/workflows"
 DEFAULT_ALLOWLIST = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "install-timeout-allowlist.tsv",
@@ -62,8 +62,10 @@ INSTALL_COMMANDS: tuple[tuple[str, re.Pattern[str]], ...] = (
 # A line whose first word is a comment or an echo is not a command that runs,
 # so an install mentioned in prose or a comment is not an install.
 _NON_COMMAND = re.compile(r"^\s*(?:#|echo\b)")
-# coreutils ``timeout 300`` / ``timeout 5m`` in front of the command bounds it.
-_BOUNDED_BY_TIMEOUT = re.compile(r"(?:^|[\s;&|])timeout\s+\d+(?:[smhd]?)\b")
+# coreutils ``timeout`` in front of the command bounds it, options and all:
+# ``timeout 300``, ``timeout 5m``, ``timeout -k 5 300``, ``timeout --signal=KILL 5m``.
+_BOUNDED_BY_TIMEOUT = re.compile(
+    r"(?:^|[\s;&|])timeout(?:\s+(?:-[ks]|--kill-after|--signal)\s+\S+|\s+-\S+)*\s+\d+(?:\.\d+)?[smhd]?\b")
 
 TITLES = {
     "install-unbounded": "Step installs packages with no timeout",
@@ -74,48 +76,6 @@ TITLES = {
 
 class AllowlistError(Exception):
     """The allowlist file is malformed, so nothing it says can be trusted."""
-
-
-class Finding:
-    """One unbounded install step, with the position to annotate."""
-
-    __slots__ = ("rule", "path", "line", "message")
-
-    def __init__(self, rule: str, path: str, line: int, message: str) -> None:
-        self.rule = rule
-        self.path = path
-        self.line = line
-        self.message = message
-
-    def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        return f"Finding({self.rule!r}, {self.path!r}, {self.line}, {self.message!r})"
-
-
-def _load_yaml() -> ModuleType | None:
-    """Return the yaml module, or None when PyYAML is not importable."""
-    try:
-        import yaml  # noqa: PLC0415 - optional at import time on purpose
-    except Exception:  # pragma: no cover - depends on the runner image
-        return None
-    return yaml
-
-
-def _items(node: Node | None) -> list[tuple[str, Node, int]]:
-    """(key text, value node, key line) for a mapping node, else []."""
-    from yaml.nodes import MappingNode, ScalarNode
-
-    if not isinstance(node, MappingNode):
-        return []
-    return [(key.value, value, key.start_mark.line + 1)
-            for key, value in node.value if isinstance(key, ScalarNode)]
-
-
-def _find(node: Node | None, name: str) -> tuple[Node | None, int]:
-    """The (value node, key line) of a mapping key, else (None, 1)."""
-    for key, value, line in _items(node):
-        if key == name:
-            return value, line
-    return None, 1
 
 
 def _scalar(node: Node | None) -> str:
@@ -133,22 +93,30 @@ def _declares_timeout(node: Node | None) -> bool:
     An expression such as ``${{ matrix.timeout }}`` still declares a limit the
     job's owner chose; judging its value is not this check's business.
     """
-    timeout, _line = _find(node, "timeout-minutes")
+    timeout, _line = find(node, "timeout-minutes")
     return timeout is not None and _scalar(timeout).strip() != ""
 
 
-def _bounded_lines(text: str) -> list[tuple[int, str]]:
-    """(1-based line offset in text, command label) for every unbounded install."""
+def _unbounded_installs(text: str) -> list[tuple[int, str]]:
+    """(0-based line offset in text, command label) for every unbounded install.
+
+    A command continued with ``\\`` is read as one line, reported on its first:
+    ``timeout 300 \\`` bounds the install on the next line.
+    """
     found: list[tuple[int, str]] = []
-    for offset, line in enumerate(text.splitlines()):
-        if _NON_COMMAND.match(line):
+    lines = text.splitlines()
+    offset = 0
+    while offset < len(lines):
+        start, command = offset, lines[offset]
+        # A comment ending in a backslash does not continue onto the next line.
+        while command.rstrip().endswith("\\") and not command.lstrip().startswith("#") \
+                and offset + 1 < len(lines):
+            offset += 1
+            command = command.rstrip()[:-1] + " " + lines[offset]
+        offset += 1
+        if _NON_COMMAND.match(command) or _BOUNDED_BY_TIMEOUT.search(command):
             continue
-        for label, pattern in INSTALL_COMMANDS:
-            if not pattern.search(line):
-                continue
-            if _BOUNDED_BY_TIMEOUT.search(line):
-                continue
-            found.append((offset, label))
+        found.extend((start, label) for label, pattern in INSTALL_COMMANDS if pattern.search(command))
     return found
 
 
@@ -169,7 +137,7 @@ def _allowlisted(
 
 
 def _step_label(index: int, step: Node | None) -> str:
-    name, _line = _find(step, "name")
+    name, _line = find(step, "name")
     label = _scalar(name).strip()
     return f"step {label!r}" if label else f"step #{index + 1}"
 
@@ -179,9 +147,9 @@ def _check_jobs(
 ) -> None:
     from yaml.nodes import SequenceNode
 
-    jobs, _jobs_line = _find(doc, "jobs")
-    for job_key, job, _job_line in _items(jobs):
-        uses, _uses_line = _find(job, "uses")
+    jobs, _jobs_line = find(doc, "jobs")
+    for job_key, job, _job_line in items(jobs):
+        uses, _uses_line = find(job, "uses")
         if uses is not None:
             # A reusable-workflow caller job cannot declare ``timeout-minutes``
             # — workflow syntax bans the key there — and the called workflow
@@ -190,20 +158,20 @@ def _check_jobs(
         allowed = _allowlisted(allowlist, repository, path, job_key)
         if _declares_timeout(job):
             continue
-        steps, _steps_line = _find(job, "steps")
+        steps, _steps_line = find(job, "steps")
         if not isinstance(steps, SequenceNode):
             continue
         for index, step in enumerate(steps.value):
             if _declares_timeout(step):
                 continue
-            run, _run_line = _find(step, "run")
+            run, _run_line = find(step, "run")
             if run is None:
                 continue  # a `uses:` step installs nothing itself
             # The first content line of a block scalar (``run: |``) is the line
             # after the key; a plain scalar shares the key's line.
             block = getattr(run, "style", None) in ("|", ">")
             run_start = run.start_mark.line + 1 + (1 if block else 0)
-            for offset, label in _bounded_lines(_scalar(run)):
+            for offset, label in _unbounded_installs(_scalar(run)):
                 if allowed:
                     continue
                 findings.append(
@@ -258,7 +226,7 @@ def check_workflow(
     allowlist: frozenset[tuple[str, str, str]],
 ) -> list[Finding]:
     """Every finding for one workflow file, in file order."""
-    yaml = _load_yaml()
+    yaml = load_yaml()
     if yaml is None:
         return [
             Finding(
@@ -299,45 +267,19 @@ def check_workflow(
     return findings
 
 
-def _workflow_files(directory: str) -> list[str]:
-    if not os.path.isdir(directory):
-        return []
-    names = sorted(os.listdir(directory))
-    return [
-        os.path.join(directory, name)
-        for name in names
-        if name.endswith((".yml", ".yaml")) and os.path.isfile(os.path.join(directory, name))
-    ]
-
-
 def scan(
     root: str,
     workflows_dir: str,
     repository: str,
     allowlist: frozenset[tuple[str, str, str]],
 ) -> list[Finding]:
-    findings: list[Finding] = []
-    for path in _workflow_files(workflows_dir):
-        try:
-            with open(path, "r", encoding="utf-8", errors="replace") as handle:
-                text = handle.read()
-        except OSError as exc:
-            findings.append(
-                Finding("workflow-unparsable", os.path.relpath(path, root), 1, f"Unreadable: {exc}")
-            )
-            continue
-        findings.extend(check_workflow(os.path.relpath(path, root), text, repository, allowlist))
-    return findings
-
-
-def _escape(message: str) -> str:
-    return message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    return workflow_yaml.scan(root, workflows_dir, lambda path, text: check_workflow(path, text, repository, allowlist))
 
 
 def emit_annotations(findings: list[Finding]) -> None:
     for finding in findings:
         title = TITLES.get(finding.rule, finding.rule)
-        print(f"::error file={finding.path},line={finding.line},title={title}::{_escape(finding.message)}")
+        print(f"::error file={finding.path},line={finding.line},title={title}::{escape(finding.message)}")
 
 
 def emit_summary(findings: list[Finding], summary_path: str | None) -> None:
@@ -374,21 +316,20 @@ def main(argv: list[str] | None = None) -> int:
         description="Fail on workflow steps that install packages with no timeout."
     )
     parser.add_argument("--root", default=os.environ.get("GITHUB_WORKSPACE") or os.getcwd())
-    parser.add_argument("--workflows-dir", default=None)
     parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY", ""))
     parser.add_argument("--allowlist", default=DEFAULT_ALLOWLIST)
     parser.add_argument("--json", action="store_true", help="print findings as JSON and nothing else")
     parser.add_argument("--summary", default=os.environ.get("GITHUB_STEP_SUMMARY"))
     args = parser.parse_args(argv)
     root = os.path.abspath(args.root)
-    workflows_dir = args.workflows_dir or os.path.join(root, DEFAULT_WORKFLOWS_DIR)
+    workflows_dir = os.path.join(root, workflow_yaml.WORKFLOWS_DIR)
     could_not_run = 0
     try:
         allowlist = load_allowlist(args.allowlist)
     except AllowlistError as exc:
         allowlist: frozenset[tuple[str, str, str]] = frozenset()
         could_not_run = 1
-        print(f"::error title={TITLES['check-could-not-run']}::{_escape(str(exc))}")
+        print(f"::error title={TITLES['check-could-not-run']}::{escape(str(exc))}")
         print(f"install-timeout check could not run: {exc}", file=sys.stderr)
     findings = scan(root, workflows_dir, args.repository, allowlist)
     if args.json:
@@ -408,7 +349,7 @@ def main(argv: list[str] | None = None) -> int:
     emit_summary(findings, args.summary)
     print(
         f"Install timeouts: {len(findings)} unbounded install step(s) across "
-        f"{len(_workflow_files(workflows_dir))} workflow file(s)."
+        f"{len(workflow_files(workflows_dir))} workflow file(s)."
     )
     print(f"install-timeout-count={len(findings)}")
     # A gate: findings fail the run, and so does a check that could not run.

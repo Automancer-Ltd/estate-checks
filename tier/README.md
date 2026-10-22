@@ -62,7 +62,8 @@ Most repositories pass no inputs. The built-in lists live in `classify.py`:
 **The quick job's tests are named, not traced.** For a core change the action
 lists the test files that refer to a changed file by folder and name
 (`lib/costEnvelope`, `lib.costEnvelope`, or `engine/effects` for an index
-module), plus any changed test files, as the `direct-tests` output. Following
+module), including a deleted file or a renamed file's old path, plus any
+changed test files that still exist, as the `direct-tests` output. Following
 every import (`vitest related`) selects most of a suite when a small change
 touches a widely imported module: in dungeon-master a one-line change to
 `convex/lib/costEnvelope.ts` ran past six minutes on one runner. Typecheck
@@ -147,9 +148,14 @@ configure checkout in other jobs or change history depth or tier selection.
   classified alone.
 - **Dispatch on the default branch** (`deploy-on-main`'s `dispatch-ci`, for a
   merge no PR run proved): as a push, from the newest first-parent ancestor
-  that CI proved (a passing push or dispatch run of this workflow, or a tree a
-  PR run passed), so any unproved commit in between joins the diff. No proven
-  ancestor in 20 commits gives `standard`.
+  that CI proved (a passing push or dispatch run of this workflow, or exactly a
+  tree a PR run passed; a docs-only difference from one is not proof), so any unproved commit in between joins the diff. Because that
+  ancestor is proven, a merge whose diff from it is documentation alone gives
+  `none` without the code main gained while the PR waited. No proven ancestor in
+  20 commits gives `standard`. Every run records its tier in a `ci-tier` notice
+  (`tier=<tier>`, plus `tested-tree=` on a PR); automancer-ops `ci-proof.sh`
+  accepts a dispatch whose record reads `tier=none` as deploy proof, because only
+  tier and gate run then (t6378).
 - **Anything else** (`workflow_dispatch` on another branch, `schedule`, a force push, a new
   branch, an API error, a failed checkout, more than 300 changed files on a
   push): `standard`. The action never fails the job.

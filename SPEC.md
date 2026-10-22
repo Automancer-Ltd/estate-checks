@@ -37,17 +37,17 @@ Give repositories a shared CI check for outside network and subprocess calls tha
 - State: built
 - Shaped by: The action's warning and strict modes, differential scans, and the validation cases in `scripts/test-validation.py`.
 
-### Workflow standards check (`scripts/workflow-standards.py`, `scripts/test-workflow-standards.py`)
+### Workflow standards check (`scripts/workflow-standards.py`, `scripts/test-workflow-standards.py`; YAML reading shared in `scripts/workflow_yaml.py`)
 
 - What it does: Reads the caller's `.github/workflows/*.yml` and annotates breaches of `ci-standards` rules 1-4 — a job with no `timeout-minutes` or above the 30-minute cap, a workflow with no concurrency group, a `push:` without a branch filter or filtered away from the default branch, an organisation job whose `runs-on` is a hosted label literal instead of `vars.CI_RUNNER`, and an `on: schedule` trigger (`workflow-schedule-trigger`). A schedule has no exception (ci-standards, 21 Oct 2026). Warning only: it exits 0 with findings, and a workflow it cannot parse is reported as a warning rather than a clean result. Parses with `yaml.compose` so each annotation carries the line of the key at fault. The tests pin every rule against a fixture that must be flagged and one that must not.
 - State: built
 - Shaped by: The `ci-standards` rules, precision-over-recall (personal repositories, expressions, self-hosted labels, tag-only pushes and 10-30 minute timeouts are deliberately not judged), and Waseem's 2026-09-27 warn-only decision. Contradiction 7 of `/opt/automancer/auto/plans/repo-shaping-2026-10-15.md`.
 
-### Install timeout check (`scripts/install-timeouts.py`, `scripts/test-install-timeouts.py`, `install-timeout-allowlist.tsv`)
+### Install timeout check (`scripts/install-timeouts.py`, `scripts/test-install-timeouts.py`, `install-timeout-allowlist.tsv`; YAML reading shared in `scripts/workflow_yaml.py`)
 
 - What it does: Reads the caller's `.github/workflows/*.yml` and fails the run when a `run:` step executes a package install — `pip install` (and `pip3`, `python -m pip`), `uv pip install`, `npm ci`/`npm install`, `apt-get install`/`apt install`, `go install` — while neither the step nor its job declares `timeout-minutes`. Deliberate exceptions are rows (`repo`, workflow path, job id, reason; `*` wildcards) in the shipped `install-timeout-allowlist.tsv`; a malformed row, a missing PyYAML or an unparsable workflow fails loudly rather than passing silently. Parses with `yaml.compose` and annotates on the install command's line.
 - State: built
-- Shaped by: tracker t4456 (the automancer-ops release check killed 4m38s into an unbounded `pip` install, 19 Oct 2026, run 39332563829) and precision-over-recall: comments, `echo` lines, `timeout N`-wrapped commands, expression timeouts and reusable-workflow caller jobs are not findings.
+- Shaped by: tracker t4456 (the automancer-ops release check killed 4m38s into an unbounded `pip` install, 19 Oct 2026, run 39332563829) and precision-over-recall: comments, `echo` lines, `timeout`-wrapped commands (with options or a `\`-continued line), expression timeouts and reusable-workflow caller jobs are not findings.
 
 ### Repository CI (`.github/workflows/ci.yml`)
 

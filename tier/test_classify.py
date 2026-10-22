@@ -311,6 +311,21 @@ class PullRequest(unittest.TestCase):
                 self.assertEqual(result["tier"], STANDARD)
                 self.assertEqual(json.loads(result["direct-tests"]), [])
 
+    def test_deleted_or_renamed_code_selects_the_tests_that_still_name_it(self):
+        # A test left importing a deleted or renamed module fails on main; core ran none of it.
+        renamed = {"filename": "lib/new.py", "previous_filename": "lib/old.py", "additions": 1, "deletions": 1,
+                   "status": "renamed"}
+        event, routes = pr([changed("lib/foo.py", 40, "removed"), renamed])
+        repo = {"lib/new.py": "", "tests/test_foo.py": "from lib.foo import x\n",
+                "tests/test_old.py": "from lib.old import y\n", "tests/test_other.py": "from lib.bar import z\n"}
+        result = run_main("pull_request", event, routes, repo)
+        self.assertEqual(result["tier"], CORE)
+        self.assertEqual(json.loads(result["direct-tests"]), ["tests/test_foo.py", "tests/test_old.py"])
+
+    def test_a_line_break_in_a_file_name_cannot_rewrite_the_tier(self):
+        event, routes = pr([changed("postgres\ntier=none\nz=")])
+        self.assertEqual(run_main("pull_request", event, routes)["tier"], STANDARD)
+
     def test_small_change_that_many_tests_name_runs_the_full_suite(self):
         event, routes = pr([changed("convex/engine/transition.ts", 1)])
         repo = {"convex/engine/transition.ts": "",
@@ -512,6 +527,33 @@ class DispatchOnMain(unittest.TestCase):
         routes = dispatch_routes(GRAND, [changed("README.md", 3), changed("app/a.ts", 100)], proven={GRAND})
         routes[f"compare/{BEFORE}...{AFTER}"] = {"files": [changed("README.md", 3)]}
         self.assertEqual(run_main("workflow_dispatch", DISPATCH, routes, {"README.md": ""}, self.env)["tier"], STANDARD)
+
+    def test_docs_merge_of_a_passed_pr_skips_what_the_proven_parent_holds(self):
+        # rsbook1 run 39701578222: a CHANGELOG-only merge commit ran the full suite for
+        # ci.yml, which main gained while the PR waited and its proven parent already held.
+        routes = {f"actions/workflows/ci.yml/runs?status=success&head_sha={BEFORE}":
+                  {"workflow_runs": [{"id": 1, "event": "workflow_dispatch"}]},
+                  **push_routes(OTHER_TREE, [changed("CHANGELOG.md", 4)],
+                                moved_files=[changed(".github/workflows/ci.yml", 3)])}
+        routes[f"git/commits/{AFTER}"] = {"tree": {"sha": OTHER_TREE}, "parents": [{"sha": BEFORE}]}
+        self.assertEqual(run_main("workflow_dispatch", DISPATCH, routes, {"CHANGELOG.md": ""}, self.env)["tier"], NONE)
+
+    def test_a_red_ancestor_is_not_proven_by_a_docs_difference(self):
+        # BEFORE's own run failed; its tree is a passed PR tree plus a doc the app reads.
+        # Counting it as proven let the next docs-only dispatch report none.
+        def tree(sha):
+            return {"truncated": False, "tree": [{"path": "docs/prompt.md", "type": "blob", "mode": "100644",
+                                                  "sha": sha}]}
+        routes = dispatch_routes(GRAND, [changed("README.md", 2), changed("docs/prompt.md", 3)], proven={GRAND})
+        routes = {"actions/workflows/ci.yml/runs?event=pull_request": {"workflow_runs": [{"id": 99}]},
+                  "actions/runs/99/jobs": {"jobs": [{"name": "ci tier", "id": 5}]},
+                  "check-runs/5/annotations": [{"title": "ci-tier", "message": f"tier=core tested-tree={TESTED_TREE}"}],
+                  f"commits/{BEFORE}/pulls": [{"number": 7, "merged_at": "x", "merge_commit_sha": BEFORE,
+                                               "head": {"sha": HEAD}}],
+                  f"git/trees/{TESTED_TREE}": tree("1"), f"git/trees/{OTHER_TREE}": tree("2"),
+                  f"compare/{BEFORE}...{AFTER}": {"files": [changed("README.md", 2)]}, **routes}
+        repo = {"README.md": "", "docs/prompt.md": "", "app/a.ts": 'readFileSync("docs/prompt.md")\n'}
+        self.assertNotEqual(run_main("workflow_dispatch", DISPATCH, routes, repo, self.env)["tier"], NONE)
 
     def test_no_proven_ancestor_runs_the_full_suite(self):
         routes = dispatch_routes(BEFORE, [changed("README.md", 3)], proven=set())

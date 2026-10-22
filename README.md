@@ -154,8 +154,9 @@ list ships empty; every row needs a reason a reviewer can check.
 
 ### Precision decisions
 
-- **A bounded command is not an install.** A line wrapped in coreutils `timeout 300 …` (or
-  `timeout 5m …`) is bounded and passes without touching the workflow.
+- **A bounded command is not an install.** A command wrapped in coreutils `timeout 300 …`
+  (or `timeout 5m …`, `timeout -k 5 300 …`, `timeout --signal=KILL 5m …`, or `timeout 300 \`
+  with the install on the next line) is bounded and passes without touching the workflow.
 - **Comments and echoes are not commands.** `# pip install …` and `echo "npm install …"` do not
   run an install, so they are not findings.
 - **Reusable-workflow caller jobs are exempt.** Workflow syntax bans `timeout-minutes` on a job
@@ -298,7 +299,10 @@ A merge updates source; consumers execute `v1`. Before changing it:
 1. Confirm the candidate merge tree passed this repo's required `check` job.
 2. In an owned disposable consumer PR, pin both actions to the candidate SHA.
    Prove tier outputs and scanner annotations in the runner, then close the PR
-   unmerged. Keep its CI link in the release notes.
+   unmerged. Keep its CI link in the release notes. A consumer without a tier
+   step (inbox-labeller since its #36) needs one added in that PR, and its
+   workflow `permissions:` need `pull-requests`, `actions` and `checks: read`,
+   or the tier reads HTTP 403 and falls back to `standard` (inbox-labeller#37).
 3. Record the old `v1` SHA with `git ls-remote --tags origin refs/tags/v1`.
 4. Create the next semver tag at that candidate, publish its GitHub release, and
    move `v1` to it. Read both remote tags back and require the candidate SHA.
