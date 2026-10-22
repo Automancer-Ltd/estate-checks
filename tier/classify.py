@@ -541,8 +541,12 @@ def proven_ancestor(api: Api, after: str, workflow_path: str, job_name: str, cfg
         sha = parents[0]["sha"]
         runs = api.paged(f"actions/workflows/{workflow}/runs?status=success&head_sha={sha}",
                          key="workflow_runs", limit=20)
-        if any(r.get("event") in ("push", "workflow_dispatch") for r in runs) \
-                or passed_pr(api, sha, workflow_path, job_name, cfg)[0]:
+        if any(r.get("event") in ("push", "workflow_dispatch") for r in runs):
+            return sha
+        # Only an exact tested tree: a docs-only difference has had no check for code
+        # reading those docs, and this commit's own run may have failed on one.
+        skip = passed_pr(api, sha, workflow_path, job_name, cfg)[0]
+        if skip and not skip.files:
             return sha
     return None
 
@@ -593,10 +597,10 @@ def _scan(state: dict[str, Any], cfg: Config, root: str) -> Decision:
         reason += "; docs read by code: " + ", ".join(f"{d} ({by})" for d, by in sorted(read.items()))
     tests: list[str] = []
     if tier == CORE:
-        convex = [p for f in files for p in _paths(f) if p.startswith("convex/")]
-        tests = direct_tests([f.path for f in files if f.status != "removed"] + convex,
-                             tracked, cfg.test_globs, root)
-        unmatched = [p for p in convex if not direct_tests([p], tracked, cfg.test_globs, root)]
+        # Deleted and old renamed paths too: a test still importing one fails on main.
+        paths = [p for f in files for p in _paths(f)]
+        tests = direct_tests(paths, tracked, cfg.test_globs, root)
+        unmatched = [p for p in paths if p.startswith("convex/") and not direct_tests([p], tracked, cfg.test_globs, root)]
         if unmatched:
             tier, reason = STANDARD, (f"{reason}, but no test names Convex file(s): {', '.join(unmatched)}; "
                                       "running the full suite")
@@ -641,7 +645,8 @@ def main(argv: list[str], environ: Mapping[str, str] = os.environ,
         d = Decision(STANDARD, f"could not classify ({type(exc).__name__}: {exc}); running the full suite")
         print(f"::warning title={NOTICE_TITLE}::{d.reason}")
 
-    tier, reason = d.tier, d.reason
+    # One line: a file name may hold a line break, and each output line sets a value.
+    tier, reason = d.tier, " ".join(d.reason.splitlines())
     print(f"Tier: {tier} — {reason}")
     # Every run records its tier: ci-proof.sh accepts a dispatch whose tier was none (t6378).
     print(f"::notice title={NOTICE_TITLE}::tier={tier}" + (f" tested-tree={d.tested_tree}" if d.tested_tree else ""))
