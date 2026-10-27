@@ -1,32 +1,35 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-# git feeds a pre-push hook its ref list on STDIN exactly ONCE, and the gitleaks
-# scan below drains stdin while it runs. Capture the list up front so anything
-# added after this block can still see the refs.
+# Estate secret-scanning pre-push (house standard, from projects/personal/duet).
+#
+# DELIBERATELY LIVE — do not turn this off, and do not "fix" it back to a warning.
+# Installed 2026-08-29 after a live credential was committed and pushed to this
+# estate on 2026-08-25.
+#
+# git feeds a pre-push hook its ref list on STDIN exactly ONCE. Capture it up
+# front so anything added after this point can still read it, and so "no refs"
+# can be told apart from "an earlier check drained stdin".
 REFS="$(cat)"
-
 red='\033[0;31m'; yellow='\033[1;33m'; green='\033[0;32m'; nc='\033[0m'
 
-if command -v gitleaks >/dev/null 2>&1; then
-  if ! gitleaks git --redact --config .gitleaks.toml --no-banner --log-opts=HEAD >/dev/null 2>&1; then
-    echo -e "${red}✗ Push blocked:${nc} gitleaks found potential secrets in repository history."
-    echo -e "Run: gitleaks git --redact --config .gitleaks.toml --log-opts=HEAD"
-    exit 1
-  fi
-else
-  echo -e "${yellow}! gitleaks not installed; running basic fallback scan.${nc}"
-  # Matches secret-carrying FILE SHAPES only. It used to also match the bare
-  # words token|secret|credential anywhere in a path, which blocks a repo that
-  # legitimately tracks secrets.ts or credentials.md -- permanently, with no
-  # remediation. gitleaks scans content; this fallback only exists for a device
-  # that has no gitleaks at all.
-  suspect=$(git ls-files | grep -Ei '(^|/)(\.env$|\.env\..+|.*\.pem$|.*\.key$|.*\.token$|.*credentials\.json$|id_rsa$)' | grep -vE '^\.env\.(example|sample|template)$' || true)
-  if [[ -n "$suspect" ]]; then
-    echo -e "${red}✗ Push blocked:${nc} suspicious tracked filenames detected:"
-    echo "$suspect"
-    exit 1
-  fi
-fi
+# THE SECRET SCAN THAT USED TO SIT HERE IS GONE ON PURPOSE (2026-09-01, board).
+#
+# CI owns this repository's configured secret scan for pushes and pull requests.
+# Scan scope and implementation vary by repository; CI is the source of truth,
+# and this hook must not claim that every repository scans full history. In
+# `automancer-auto`, for example, CI scans the commits added by a change.
+# Scanning again here duplicates the CI check without adding protection.
+#
+# WHAT STILL PROTECTS THIS REPOSITORY, and it is more, not less:
+#   1. `.githooks/pre-commit` runs `gitleaks git --staged` on every commit. That
+#      catches a secret BEFORE it is committed, which is strictly earlier than
+#      this hook could.
+#   2. CI runs this repository's configured secret-scanning checks on pushes
+#      and pull requests. Keep this description aligned with actual CI behaviour,
+#      without naming a workflow file that may be renamed or absent elsewhere.
+#
+# Do NOT re-add a full-history scan here. If you are copying this hook into a
+# repository that has NO secret-scan CI job, keep the scan -- the rule is that
+# it runs exactly ONCE per push, in CI where CI exists and locally where it
+# does not.
 
-echo -e "${green}✓ pre-push checks passed${nc}"
