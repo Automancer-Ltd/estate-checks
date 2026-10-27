@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Secret-scanning pre-commit hook.
+# Blocks sensitive filenames and scans staged content for secrets.
+# Fix a finding before committing; a failed scan is not a clean scan.
+red='\033[0;31m'; green='\033[0;32m'; nc='\033[0m'
+
+# Filename rule: credential-SHAPED names only. A guard that cries wolf gets
+# bypassed, so this list holds names that carry secrets and never carry prose
+# or design data:
+#   .env / .env.<anything>      runtime environment dumps (templates exempted below)
+#   *.token, token.json         cached OAuth tokens; ms-graph/msgraph variants
+#   token.env, tokens.env, token.txt, tokens.txt   plain-text token dumps
+#   *.pem *.key *.p12 *.pfx id_rsa, *credentials.json   keys and service accounts
+#   .openclaw/, memory/, MEMORY.md, USER.md, openclaw.json   agent state
+# It deliberately does NOT block every path containing "token", "secret" or
+# "credential": ordinary source and design data can use those words.
+# Content scanning by gitleaks below is the actual control; this list is only
+# a floor for file shapes.
+blocked_paths_regex='(^|/)(\.openclaw/|memory/|MEMORY\.md$|USER\.md$|openclaw\.json$|\.env$|\.env\..+|.*\.token$|token\.json$|ms-graph-token\.json$|msgraph-calendar-token\.json$|tokens?\.(env|txt)$|.*\.pem$|.*\.key$|.*\.p12$|.*\.pfx$|id_rsa$|.*credentials\.json$)'
+staged_files=$(git diff --cached --name-only --diff-filter=ACM || true)
+# Committed templates at any depth: .env.example, apps/x/.env.example,
+# .env.staging.example. Their content is still scanned below.
+staged_files=$(echo "$staged_files" | grep -vE '(^|/)\.env(\.[^/]+)?\.(example|sample|template)$' || true)
+if [[ -n "$staged_files" ]] && echo "$staged_files" | grep -E "$blocked_paths_regex" >/dev/null; then
+  echo -e "${red}✗ Commit blocked:${nc} staged files include sensitive paths."
+  echo "$staged_files" | grep -E "$blocked_paths_regex" || true
+  exit 1
+fi
+
+if command -v gitleaks >/dev/null 2>&1; then
+  # A finding and a broken scan are different facts and must say different
+  # things. gitleaks exits 1 for BOTH findings and some operational failures, so
+  # findings get a dedicated exit code (--exit-code 99) to tell them apart.
+  # Findings output is never printed — even redacted output names files and
+  # rules. Operational-failure output IS shown, so breakage gets fixed rather
+  # than misreported as a leak.
+  gitleaks_status=0
+  gitleaks_output=$(gitleaks git --staged --redact --config .gitleaks.toml --no-banner --exit-code 99 2>&1) || gitleaks_status=$?
+  if [[ $gitleaks_status -eq 99 ]]; then
+    echo -e "${red}✗ Commit blocked:${nc} gitleaks found potential secrets in the staged changes."
+    echo "  (Findings are deliberately not printed. To see redacted detail: gitleaks git --staged --redact --config .gitleaks.toml)"
+    exit 1
+  elif [[ $gitleaks_status -ne 0 ]]; then
+    echo -e "${red}✗ Commit blocked:${nc} the gitleaks scan itself FAILED to run (exit ${gitleaks_status}) — an operational/config/tool failure, not a scan verdict. Fix the scan; do not bypass it."
+    echo "${gitleaks_output}" | tail -n 5
+    exit 1
+  fi
+else
+  # Say so loudly. A silent skip means this hook prints a green tick having run
+  # only the far weaker regex fallback — and a green tick you have read is not a
+  # check that ran.
+  echo -e "${red}!${nc} gitleaks is NOT installed on this device — only the regex fallback below ran."
+  echo "  Install it before trusting this hook: https://github.com/gitleaks/gitleaks/releases"
+
+  # Fallback ONLY. It has no allowlist mechanism and documentation legitimately
+  # discusses credential handling, so running it beside gitleaks would mean
+  # permanent unsuppressable false positives; running it only when gitleaks is
+  # missing keeps a real floor on a device that has no scanner at all.
+  patch=$(git diff --cached --no-ext-diff --no-color -U0 | awk '/^diff --git / { hunk=0 } /^@@ / { hunk=1; next } hunk && /^\+/ { print substr($0,2) }' || true)
+  # Two patterns, not one. A single combined regex would need the inline `(?i)`
+  # flag, which grep -E does not implement. Token shapes stay case-sensitive on
+  # purpose: AKIA... is an AWS key, akia... is not.
+  token_regex='(sk-[A-Za-z0-9_-]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|-----BEGIN (RSA|EC|OPENSSH|PRIVATE) KEY-----)'
+  assign_regex='(api[_-]?key|secret|token|password)[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_-]{16,}'
+  if echo "$patch" | grep -E "$token_regex" >/dev/null \
+    || echo "$patch" | grep -Ei "$assign_regex" >/dev/null; then
+    echo -e "${red}✗ Commit blocked:${nc} regex fallback scanner detected possible secret material."
+    exit 1
+  fi
+fi
+
+echo -e "${green}✓ pre-commit secret checks passed${nc}"
