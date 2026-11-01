@@ -1,6 +1,6 @@
 # CI tier — run CI in proportion to the change
 
-Last verified: 2026-10-17 on automancer-vps
+Last verified: 2026-11-01 on a Boat lane VM (touched-files, t12481)
 
 `Automancer-Ltd/estate-checks/tier@v1` decides how much CI a change needs.
 Waseem's rule (2026-10-03): a docs-only change runs no CI, a small scoped fix
@@ -127,6 +127,26 @@ all other source, test, documentation and configuration directories. To exclude
 an asset directory with patterns, set `sparse-checkout-cone-mode: 'false'`.
 These inputs affect only the tier action's conditional checkout. They do not
 configure checkout in other jobs or change history depth or tier selection.
+
+## Path-filtering steps on what a change touched
+
+`touched-files` is the output to path-filter steps on: a JSON array of every
+path the change touched, including a deleted file and the old path of a rename.
+`changed-files` lists only paths that still exist, for a step that lints or
+tests them, so a filter on it misses a change that deletes a file under the
+folder it guards (t12481). Both are `[]` when the tier needs no file list (an
+already-tested push, a classification failure, 300+ files on a push), so a
+filter must run its step on `[]`:
+
+```yaml
+- if: >-
+    steps.tier.outputs.tier != 'none' && (steps.tier.outputs.touched-files == '[]' ||
+    contains(steps.tier.outputs.touched-files, 'packages/'))
+```
+
+`contains` matches a substring of the JSON text, so `'packages/'` also matches
+`apps/x/packages/y.ts`. Where that matters, anchor on the opening quote
+(`'"packages/'`) to match only the top-level folder.
 
 ## How each tier is decided
 

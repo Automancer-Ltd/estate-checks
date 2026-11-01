@@ -2,7 +2,9 @@
 
 A consumer invokes `Automancer-Ltd/estate-checks/tier@v1` and uses its `tier` and
 `reason` outputs to choose work. The driver executes its manifest's plan and scan
-steps against a synthetic PR file API and committed checkout.
+steps against a synthetic PR file API and committed checkout. Every PR journey
+also requires `touched-files`, the output consumers path-filter steps on, to name
+the changed file through the manifest's output expression.
 
 - `docs`: unread documentation returns `none`.
 - `agent-skill-markdown`: a large Markdown change under `.agents/skills/` stays

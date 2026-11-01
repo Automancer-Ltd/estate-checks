@@ -57,8 +57,11 @@ outputs:
     description: 'Why that tier was chosen'
     value: ${{ steps.scan.outputs.reason || steps.plan.outputs.reason }}
   changed-files:
-    description: 'JSON array of changed paths that still exist (empty when the tier needs no file list, e.g. an already-tested push)'
+    description: 'JSON array of changed paths that still exist, for linting or testing them (empty when the tier needs no file list, e.g. an already-tested push). Path-filter steps on touched-files instead.'
     value: ${{ steps.scan.outputs.changed-files || steps.plan.outputs.changed-files || '[]' }}
+  touched-files:
+    description: 'JSON array of every path the change touched: changed-files plus deleted paths and the old path of a rename (empty when the tier needs no file list). Use it to decide whether a step runs.'
+    value: ${{ steps.scan.outputs.touched-files || steps.plan.outputs.touched-files || '[]' }}
   direct-tests:
     description: 'Core tier only: JSON array of the test files that name the changed code (folder/name), plus changed test files. Run these in the quick job.'
     value: ${{ steps.scan.outputs.direct-tests || steps.plan.outputs.direct-tests || '[]' }}

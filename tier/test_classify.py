@@ -256,6 +256,29 @@ class PullRequest(unittest.TestCase):
         self.assertEqual(result["tier"], CORE)
         self.assertEqual(json.loads(result["changed-files"]), ["README.md", "app/a.ts"])
 
+    def test_touched_files_names_deleted_and_renamed_from_paths(self):
+        # t12481: automancer-dashboard path-filters its suites; a PR deleting a file
+        # under packages/ while editing apps/tracker must still run the autodash step.
+        rename = {**changed("apps/portal/new.ts", 1, "renamed"), "previous_filename": "apps/portal/old.ts"}
+        files = [changed("apps/tracker/src/a.ts", 3), changed("packages/lifecycles/src/gone.ts", 0, "removed"),
+                 rename]
+        want = ["apps/portal/new.ts", "apps/portal/old.ts", "apps/tracker/src/a.ts", "packages/lifecycles/src/gone.ts"]
+        event, routes = pr(files)
+        core = run_main("pull_request", event, routes, {"apps/tracker/src/a.ts": "", "apps/portal/new.ts": ""})
+        self.assertEqual(core["tier"], CORE)
+        self.assertEqual(json.loads(core["changed-files"]), ["apps/portal/new.ts", "apps/tracker/src/a.ts"])
+        self.assertEqual(json.loads(core["touched-files"]), want)
+        event, routes = pr(files + [changed("pnpm-lock.yaml", 400)])
+        standard = run_main("pull_request", event, routes)
+        self.assertEqual(standard["tier"], STANDARD)
+        self.assertEqual(json.loads(standard["touched-files"]), sorted(want + ["pnpm-lock.yaml"]))
+
+    def test_a_delete_only_change_still_names_what_it_touched(self):
+        event, routes = pr([changed("packages/lifecycles/src/gone.ts", 0, "removed")])
+        result = run_main("pull_request", event, routes, {"packages/lifecycles/src/x.ts": ""})
+        self.assertEqual(json.loads(result["changed-files"]), [])
+        self.assertEqual(json.loads(result["touched-files"]), ["packages/lifecycles/src/gone.ts"])
+
     def test_core_tier_names_the_tests_that_name_the_changed_code(self):
         event, routes = pr([changed("convex/lib/costEnvelope.ts", 2), changed("convex/engine/effects/index.ts", 1),
                             changed("tests/unit/own.test.ts", 1)])
