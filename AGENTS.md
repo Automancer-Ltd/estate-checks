@@ -9,6 +9,8 @@ timeout; `tier/action.yml` decides how much CI a change needs. Terms:
 
 Run `uv sync --frozen` from a clean checkout, then `checkq -- scripts/check` on
 auto-vps. It runs Ruff and strict basedpyright; actionlint also runs when installed.
+On Windows, set `PYTHONIOENCODING=utf-8` before running the test scripts: their
+`✓` output dies on the console's cp1252 codec otherwise.
 Name only the affected test files, for example:
 `checkq -- scripts/check tier/test_classify.py`.
 CI owns the full suite, Semgrep rule fixtures and composite-action checks.
