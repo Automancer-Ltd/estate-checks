@@ -685,10 +685,13 @@ def main(argv: list[str], environ: Mapping[str, str] = os.environ,
     print(f"::notice title={NOTICE_TITLE}::tier={tier}" + (f" tested-tree={d.tested_tree}" if d.tested_tree else ""))
     # Existing paths only: a deleted file has nothing to lint or test.
     changed = sorted({f.path for f in d.files if f.status != "removed"})
+    # Deleted and old renamed paths too, for path filters: deleting a file under
+    # packages/ can break a suite the filter guards (t12481).
+    touched = sorted({p for f in d.files for p in _paths(f)})
     if out:
         with open(out, "a", encoding="utf-8") as fh:
             fh.write(f"needs-scan=false\ntier={tier}\nreason={reason}\nchanged-files={json.dumps(changed)}\n"
-                     f"direct-tests={json.dumps(d.direct_tests)}\n")
+                     f"touched-files={json.dumps(touched)}\ndirect-tests={json.dumps(d.direct_tests)}\n")
     summary = environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as fh:

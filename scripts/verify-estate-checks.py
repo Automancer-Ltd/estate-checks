@@ -185,6 +185,7 @@ def verify(evidence: Path) -> None:
                 code, outputs = action(ROOT / "tier/action.yml", work, dest, env, inputs)
                 assert code == 0 and outputs["tier"] == want, (name, code, outputs)
                 assert json.loads(outputs["direct-tests"]) == tests, (name, outputs)
+                assert json.loads(outputs["touched-files"]) == [changed], (name, outputs)
                 results.append({"journey": name, "outputs": outputs})
 
             for name in ("tested-push", "merge-skew", "docs-moved", "api-failure", "dispatch"):
