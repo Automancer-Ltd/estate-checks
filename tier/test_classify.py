@@ -8,6 +8,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from typing import ClassVar
 
 from classify import CORE, NONE, STANDARD, ChangedFile, Config, classify, main
 
@@ -426,7 +427,7 @@ def push_routes(pushed_tree, compare_files, moved_files=None):
 
 
 class PushToMain(unittest.TestCase):
-    code = [changed("app/a.ts", 100)]
+    code: ClassVar[list[ChangedFile]] = [changed("app/a.ts", 100)]
 
     def test_skips_when_main_tree_is_exactly_what_the_pr_passed(self):
         self.assertEqual(run_main("push", PUSH, push_routes(TESTED_TREE, self.code))["tier"], NONE)
@@ -516,7 +517,7 @@ def dispatch_routes(compare_from, compare_files, proven):
 class DispatchOnMain(unittest.TestCase):
     # t6155: after dropping push:, every deploy-on-main dispatch for a moved-main merge
     # ran the full suite, where the push run it replaced had run the merge's own tier.
-    env = {"GITHUB_SHA": AFTER}
+    env: ClassVar[dict[str, str]] = {"GITHUB_SHA": AFTER}
 
     def test_docs_since_the_proven_parent_run_nothing(self):
         routes = dispatch_routes(BEFORE, [changed("README.md", 3)], proven={BEFORE})

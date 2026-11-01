@@ -174,7 +174,7 @@ def main() -> int:
     try:
         with open(results_file, "r", encoding="utf-8") as f:
             data: ScanData = json.load(f)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - any unreadable results file must become a CI warning
         print(f"::warning::Failed to parse JSON from '{results_file}': {e}", file=sys.stderr)
         return 1
 
@@ -195,7 +195,7 @@ def main() -> int:
         excludes = [p.strip() for p in os.environ.get("ESTATE_CHECKS_EXCLUDES", "").replace(",", "\n").splitlines() if p.strip()]
         try:
             in_scope = find_in_scope_files(repo_root, base_commit, excludes)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - a failed file-list read must become a CI warning
             print(f"::warning::Semgrep scanned 0 files and the in-scope file list could not be read: {e}", file=sys.stderr)
             return 1
         if in_scope:
@@ -230,7 +230,7 @@ def main() -> int:
     try:
         with open(results_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - a failed write must become a CI warning
         print(f"::warning::Failed to update '{results_file}' with deduplicated results: {e}", file=sys.stderr)
 
     count = len(deduped_results)

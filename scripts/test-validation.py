@@ -21,7 +21,7 @@ def test_fatal_error_fails() -> None:
         }, f)
         path = f.name
     try:
-        proc = subprocess.run([sys.executable, SUMMARY_SCRIPT, path, "false", "", REPO_ROOT], capture_output=True, text=True)
+        proc = subprocess.run([sys.executable, SUMMARY_SCRIPT, path, "false", "", REPO_ROOT], capture_output=True, text=True, check=False)
         assert proc.returncode != 0, f"Expected non-zero exit code for fatal error, got {proc.returncode}"
         assert "fatal error" in proc.stderr.lower() or "error" in proc.stderr.lower(), f"Unexpected stderr: {proc.stderr}"
         print("  ✓ Fatal error in scan results successfully failed.")
@@ -40,7 +40,7 @@ def test_empty_scan_with_in_scope_files_fails() -> None:
         }, f)
         path = f.name
     try:
-        proc = subprocess.run([sys.executable, SUMMARY_SCRIPT, path, "false", "", REPO_ROOT], capture_output=True, text=True)
+        proc = subprocess.run([sys.executable, SUMMARY_SCRIPT, path, "false", "", REPO_ROOT], capture_output=True, text=True, check=False)
         assert proc.returncode != 0, f"Expected non-zero exit code for empty scan, got {proc.returncode}"
         assert "scanned 0 files" in proc.stderr.lower(), f"Unexpected stderr: {proc.stderr}"
         print("  ✓ Empty scan with in-scope files successfully failed.")
@@ -57,13 +57,15 @@ def _diff_repo(files_before: dict, files_after: dict) -> tuple:
     git("init", "-q")
     for name, body in files_before.items():
         os.makedirs(os.path.dirname(os.path.join(root, name)) or root, exist_ok=True)
-        open(os.path.join(root, name), "w").write(body)
+        with open(os.path.join(root, name), "w") as f:
+            f.write(body)
     git("add", ".")
     git("commit", "-qm", "base")
     base = git("rev-parse", "HEAD").stdout.strip()
     for name, body in files_after.items():
         os.makedirs(os.path.dirname(os.path.join(root, name)) or root, exist_ok=True)
-        open(os.path.join(root, name), "w").write(body)
+        with open(os.path.join(root, name), "w") as f:
+            f.write(body)
     git("add", ".")
     git("commit", "-qm", "change")
     return root, base
@@ -73,7 +75,7 @@ def _run_empty_scan(root: str, base: str, excludes: str = "") -> subprocess.Comp
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump({"results": [], "paths": {"scanned": []}, "errors": []}, f)
     env = dict(os.environ, ESTATE_CHECKS_EXCLUDES=excludes)
-    return subprocess.run([sys.executable, SUMMARY_SCRIPT, f.name, "true", base, root], capture_output=True, text=True, env=env)
+    return subprocess.run([sys.executable, SUMMARY_SCRIPT, f.name, "true", base, root], capture_output=True, text=True, env=env, check=False)
 
 
 def test_diff_scan_of_docs_only_change_passes() -> None:
@@ -106,7 +108,7 @@ def test_exclusion_hiding_server_code_warns() -> None:
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump({"results": [], "paths": {"scanned": ["b.js"]}, "errors": []}, f)
     env = dict(os.environ, ESTATE_CHECKS_EXCLUDE_PATHS="src/**", ESTATE_CHECKS_EXCLUDES="src/**")
-    proc = subprocess.run([sys.executable, SUMMARY_SCRIPT, f.name, "true", base, root], capture_output=True, text=True, env=env)
+    proc = subprocess.run([sys.executable, SUMMARY_SCRIPT, f.name, "true", base, root], capture_output=True, text=True, env=env, check=False)
     assert proc.returncode == 0, proc.stderr
     assert "src/app/api/kg/route.ts" in proc.stdout and "src/lib/act.ts" in proc.stdout, proc.stdout
     assert "src/components/Card.tsx" not in proc.stdout, proc.stdout
@@ -124,12 +126,12 @@ def test_exclude_patterns_follow_semgrep_anchoring() -> None:
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump({"results": [], "paths": {"scanned": ["b.js"]}, "errors": []}, f)
     env = dict(os.environ, ESTATE_CHECKS_EXCLUDE_PATHS="src/**, server/**")
-    proc = subprocess.run([sys.executable, SUMMARY_SCRIPT, f.name, "true", base, root], capture_output=True, text=True, env=env)
+    proc = subprocess.run([sys.executable, SUMMARY_SCRIPT, f.name, "true", base, root], capture_output=True, text=True, env=env, check=False)
     assert proc.returncode == 0, proc.stderr
     assert "apps/x/src/server/auth.ts" not in proc.stdout, f"anchored 'src/**' must not reach apps/x/src: {proc.stdout}"
     assert "server/api.ts" in proc.stdout, f"root 'server/**' must still warn: {proc.stdout}"
     env = dict(os.environ, ESTATE_CHECKS_EXCLUDE_PATHS="src/")
-    proc = subprocess.run([sys.executable, SUMMARY_SCRIPT, f.name, "true", base, root], capture_output=True, text=True, env=env)
+    proc = subprocess.run([sys.executable, SUMMARY_SCRIPT, f.name, "true", base, root], capture_output=True, text=True, env=env, check=False)
     assert proc.returncode == 0, proc.stderr
     assert "apps/x/src/server/auth.ts" in proc.stdout, f"bare 'src/' must still match at any depth: {proc.stdout}"
     print("  ✓ 'src/**' left the nested server dir alone, root 'server/**' warned, and bare 'src/' still matched at depth.")
@@ -140,7 +142,7 @@ def test_missing_results_file_fails() -> None:
     path = os.path.join(tempfile.gettempdir(), "missing-semgrep-results-99999.json")
     if os.path.exists(path):
         os.remove(path)
-    proc = subprocess.run([sys.executable, SUMMARY_SCRIPT, path, "false", "", REPO_ROOT], capture_output=True, text=True)
+    proc = subprocess.run([sys.executable, SUMMARY_SCRIPT, path, "false", "", REPO_ROOT], capture_output=True, text=True, check=False)
     assert proc.returncode != 0, f"Expected non-zero exit code for missing file, got {proc.returncode}"
     print("  ✓ Missing results file successfully failed.")
 
@@ -159,7 +161,7 @@ def test_call_site_deduplication() -> None:
         }, f)
         path = f.name
     try:
-        proc = subprocess.run([sys.executable, SUMMARY_SCRIPT, path, "false", "", REPO_ROOT], capture_output=True, text=True)
+        proc = subprocess.run([sys.executable, SUMMARY_SCRIPT, path, "false", "", REPO_ROOT], capture_output=True, text=True, check=False)
         assert proc.returncode == 0, f"Expected 0 exit code for deduplication, got {proc.returncode}: {proc.stderr}"
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)

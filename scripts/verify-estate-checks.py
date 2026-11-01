@@ -15,7 +15,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import yaml
 
@@ -30,7 +30,7 @@ def command(args: list[str], cwd: Path, env: dict[str, str] | None = None) -> st
 
 
 class ApiServer(HTTPServer):
-    routes: dict[str, Any] = {}
+    routes: ClassVar[dict[str, Any]] = {}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -91,7 +91,7 @@ def action(manifest: Path, work: Path, evidence: Path, env: dict[str, str],
         script = expand(step["run"])
         (evidence / f"{index}-command.sh").write_text(script)
         proc = subprocess.run(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script],
-                              cwd=work, env=step_env, capture_output=True, text=True, timeout=180)
+                              cwd=work, env=step_env, capture_output=True, text=True, timeout=180, check=False)
         (evidence / f"{index}-log.txt").write_text(proc.stdout + proc.stderr)
         for line in output.read_text().splitlines():
             key, value = line.split("=", 1)
@@ -174,9 +174,9 @@ def verify(evidence: Path) -> None:
                 event = dest / "event.json"
                 event.write_text(json.dumps({"pull_request": {"number": 3, "labels": labels},
                                              "repository": {"default_branch": "main"}}))
-                server.routes = {"pulls/3/files": [{"filename": changed, "additions": lines,
-                                                    "deletions": 0, "status": "modified"}],
-                                 f"git/commits/{TREE}": {"tree": {"sha": TREE}}}
+                ApiServer.routes = {"pulls/3/files": [{"filename": changed, "additions": lines,
+                                                     "deletions": 0, "status": "modified"}],
+                                   f"git/commits/{TREE}": {"tree": {"sha": TREE}}}
                 env = {**os.environ, "GITHUB_EVENT_NAME": "pull_request", "GITHUB_SHA": TREE,
                        "GITHUB_EVENT_PATH": str(event), "GITHUB_REPOSITORY": REPO,
                        "GITHUB_API_URL": f"http://127.0.0.1:{server.server_port}",
@@ -199,7 +199,7 @@ def verify(evidence: Path) -> None:
                 moved = "CHANGELOG.md" if name == "docs-moved" else "src/cost.ts"
                 # A GitHub merge commit names the PR head as its second parent. No commit-to-PR
                 # route: GitHub fills that in only seconds after a merge, so it must not be needed.
-                server.routes = {
+                ApiServer.routes = {
                     "actions/workflows/ci.yml/runs": {"workflow_runs": [{"id": 99}]},
                     "actions/runs/99/jobs": {"jobs": [{"name": "ci tier", "id": 5}]},
                     "check-runs/5/annotations": [{"title": "ci-tier", "message": "tested-tree=" + TREE}],
