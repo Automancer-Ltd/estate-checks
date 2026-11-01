@@ -10,26 +10,55 @@ set -euo pipefail
 # front so anything added after this point can still read it, and so "no refs"
 # can be told apart from "an earlier check drained stdin".
 REFS="$(cat)"
-red='\033[0;31m'; yellow='\033[1;33m'; green='\033[0;32m'; nc='\033[0m'
+DEST="${2:-}"  # the URL this push goes to
+red='\033[0;31m'; green='\033[0;32m'; nc='\033[0m'
 
-# THE SECRET SCAN THAT USED TO SIT HERE IS GONE ON PURPOSE (2026-09-01, board).
+# THIS HOOK SCANS THE COMMITS A PUSH ADDS (t12242, 1 Nov 2026).
 #
-# CI owns this repository's configured secret scan for pushes and pull requests.
-# Scan scope and implementation vary by repository; CI is the source of truth,
-# and this hook must not claim that every repository scans full history. In
-# `automancer-auto`, for example, CI scans the commits added by a change.
-# Scanning again here duplicates the CI check without adding protection.
+# `.githooks/pre-commit` scans staged changes, but `git commit --no-verify`
+# skips it. On 1 Nov 2026 no estate repository's CI scanned a branch pushed
+# without a pull request: most scanned pull requests only, some pushes to main
+# only, a few nothing (t12083, t12242). So the scan runs here, before the
+# commits leave the machine, in every repository, whatever its CI does. It
+# costs about a second. Do not drop it because a repository's CI also scans.
 #
-# WHAT STILL PROTECTS THIS REPOSITORY, and it is more, not less:
-#   1. `.githooks/pre-commit` runs `gitleaks git --staged` on every commit. That
-#      catches a secret BEFORE it is committed, which is strictly earlier than
-#      this hook could.
-#   2. CI runs this repository's configured secret-scanning checks on pushes
-#      and pull requests. Keep this description aligned with actual CI behaviour,
-#      without naming a workflow file that may be renamed or absent elsewhere.
-#
-# Do NOT re-add a full-history scan here. If you are copying this hook into a
-# repository that has NO secret-scan CI job, keep the scan -- the rule is that
-# it runs exactly ONCE per push, in CI where CI exists and locally where it
-# does not.
-
+# It scans only the commits the destination does not already have, never full
+# history (CI does that where it is configured). `-m` includes merge diffs, so a
+# secret added while resolving a merge conflict is scanned too. Copied from
+# Global-Diversity-Practice/maia#507, which was reviewed three times.
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo -e "${red}!${nc} gitleaks is NOT installed on this device: the pushed commits were not scanned."
+  echo "  Install it before trusting this hook: https://github.com/gitleaks/gitleaks/releases"
+  exit 0
+fi
+blocked() { echo -e "${red}✗ Push blocked:${nc} $*"; exit 1; }
+# What the destination already holds, asked of the destination itself. Local
+# remote-tracking refs are not used: they describe the fetch URL, which can
+# differ from the push URL, and they can be stale.
+dest_refs=$(git ls-remote -- "$DEST" 2>&1) || blocked "could not list the destination's refs, so nothing was scanned: $(tail -n 2 <<<"$dest_refs")"
+# Only commits this clone has can be ancestors of what is pushed. No lazy
+# fetch: in a partial clone each missing ref would otherwise be a network fetch.
+held=$(cut -f1 <<<"$dest_refs" | sort -u | GIT_NO_LAZY_FETCH=1 git cat-file --batch-check='%(objectname) %(objecttype)' | awk '$2 == "commit" {print $1}') || blocked "could not read the destination's refs, so nothing was scanned."
+zero=0000000000000000000000000000000000000000
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [[ -n "${local_sha:-}" && "$local_sha" != "$zero" ]] || continue  # branch deletion
+  # The commits this push adds, and the boundary: the destination's commits they
+  # build on. gitleaks gets only commit hashes, never a remote name or path.
+  walk=$({ echo "$local_sha"; awk 'NF {print "^" $1}' <<<"$held"; } | git rev-list --boundary --stdin) || blocked "could not list the commits pushed to ${remote_ref}, so nothing was scanned."
+  grep -q '^[0-9a-f]' <<<"$walk" || continue  # the destination already has them all
+  opts="-m ${local_sha}"
+  boundary=$(grep '^-' <<<"$walk" | cut -c2- | paste -sd' ' -) || true
+  [[ -z "$boundary" ]] || opts+=" --not ${boundary}"
+  status=0
+  output=$(gitleaks git --redact --config .gitleaks.toml --no-banner --exit-code 99 --log-opts="$opts" 2>&1) || status=$?
+  if [[ $status -eq 99 ]]; then
+    echo -e "${red}✗ Push blocked:${nc} gitleaks found potential secrets in the commits pushed to ${remote_ref}."
+    echo "  (Findings are deliberately not printed. To see redacted detail: gitleaks git --redact --config .gitleaks.toml --log-opts=\"${opts}\")"
+    exit 1
+  elif [[ $status -ne 0 ]]; then
+    echo -e "${red}✗ Push blocked:${nc} the gitleaks scan itself FAILED to run (exit ${status}), which is not a scan verdict. Fix the scan; do not bypass it."
+    echo "${output}" | tail -n 5
+    exit 1
+  fi
+done <<<"$REFS"
+echo -e "${green}✓ pre-push secret scan passed${nc}"
