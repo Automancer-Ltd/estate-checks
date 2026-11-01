@@ -49,21 +49,49 @@ IN_SCOPE_EXTENSIONS = {
 }
 
 
+def _seg_match(pat_segs: list[str], path_segs: list[str]) -> bool:
+    """gitignore glob: '*' and '?' stay inside one path segment; '**' spans segments."""
+    if not pat_segs:
+        return not path_segs
+    head, rest = pat_segs[0], pat_segs[1:]
+    if head == "**":
+        if not rest:
+            # A trailing 'a/**' matches everything under a/, never a/ itself.
+            return bool(path_segs)
+        return any(_seg_match(rest, path_segs[i:]) for i in range(len(path_segs) + 1))
+    return bool(path_segs) and fnmatch.fnmatchcase(path_segs[0], head) and _seg_match(rest, path_segs[1:])
+
+
 def _excluded(path: str, patterns: list[str]) -> bool:
-    """True when any exclude pattern matches the path or one of its trailing sub-paths.
+    """True when any exclude pattern matches the path, following Semgrep's
+    gitignore rules: a pattern with a slash at the start or in the middle
+    matches only from the repository root (a leading '/' is stripped); a
+    pattern with no slash, or only a trailing one, matches at any depth.
+    A trailing '/' marks a directory pattern, and a pattern matching a
+    directory excludes everything under it.
 
     Errs towards "excluded": a wrong match can only hide a crash on a scan that had
     nothing to scan, never fail a healthy one.
     """
     parts = path.split("/")
-    suffixes = ["/".join(parts[i:]) for i in range(len(parts))]
+    ancestors = [parts[:i] for i in range(1, len(parts))]
     for pat in patterns:
-        prefix = pat[:-3] if pat.endswith("/**") else None
-        for suffix in suffixes:
-            if fnmatch.fnmatch(suffix, pat) or fnmatch.fnmatch(os.path.basename(suffix), pat):
-                return True
-            if prefix and (suffix.startswith(prefix + "/") or suffix == prefix):
-                return True
+        dir_only = pat.endswith("/")
+        pat = pat.rstrip("/")
+        if pat.startswith("/"):
+            pat = pat[1:]
+            anchored = True
+        else:
+            anchored = "/" in pat
+        if not pat:
+            continue
+        pat_segs = pat.split("/")
+        if not anchored:
+            pat_segs = ["**"] + pat_segs
+        if not dir_only and _seg_match(pat_segs, parts):
+            return True
+        if any(_seg_match(pat_segs, cand) for cand in ancestors):
+            return True
     return False
 
 
