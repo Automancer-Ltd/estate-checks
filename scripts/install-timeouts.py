@@ -289,12 +289,14 @@ def emit_summary(findings: list[Finding], summary_path: str | None) -> None:
         "## Install timeouts: "
         + (f"{len(findings)} unbounded install step(s)" if findings else "no unbounded installs"),
         "",
-        "Failing check of ``.github/workflows``: a step that installs packages "
-        "(`pip install`, `uv pip install`, `npm ci`/`npm install`, `apt-get install`, "
-        "`go install`) must declare `timeout-minutes` on the step or its job. This "
-        "check fails the run — an unbounded install once held the automancer-ops "
-        "release check until the job was killed (19 Oct 2026). Deliberate exceptions "
-        "are rows in `install-timeout-allowlist.tsv` in Automancer-Ltd/estate-checks.",
+        (
+            "Failing check of ``.github/workflows``: a step that installs packages "
+            "(`pip install`, `uv pip install`, `npm ci`/`npm install`, `apt-get install`, "
+            "`go install`) must declare `timeout-minutes` on the step or its job. This "
+            "check fails the run — an unbounded install once held the automancer-ops "
+            "release check until the job was killed (19 Oct 2026). Deliberate exceptions "
+            "are rows in `install-timeout-allowlist.tsv` in Automancer-Ltd/estate-checks."
+        ),
         "",
     ]
     if findings:
@@ -333,7 +335,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"install-timeout check could not run: {exc}", file=sys.stderr)
     findings = scan(root, workflows_dir, args.repository, allowlist)
     if args.json:
-        import json  # noqa: PLC0415
+        import json
 
         print(
             json.dumps(

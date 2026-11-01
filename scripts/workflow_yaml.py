@@ -31,8 +31,8 @@ class Finding:
 def load_yaml() -> ModuleType | None:
     """Return the yaml module, or None when PyYAML is not importable."""
     try:
-        import yaml  # noqa: PLC0415 - optional at import time on purpose
-    except Exception:  # pragma: no cover - depends on the runner image
+        import yaml
+    except Exception:  # noqa: BLE001 — optional import, any failure means YAML is absent (pragma: no cover)
         return None
     return yaml
 

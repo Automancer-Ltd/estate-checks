@@ -334,9 +334,11 @@ def emit_summary(findings: list[Finding], summary_path: str | None) -> None:
         "## Workflow standards: "
         + (f"{len(findings)} warning(s)" if findings else "no warnings"),
         "",
-        "Warn-only check of ci-standards rules 1-4 (job timeouts, concurrency groups, a "
-        "filtered `push:`, `runs-on` from `vars.CI_RUNNER`, and no `on: schedule`). "
-        "It never fails this job.",
+        (
+            "Warn-only check of ci-standards rules 1-4 (job timeouts, concurrency groups, a "
+            "filtered `push:`, `runs-on` from `vars.CI_RUNNER`, and no `on: schedule`). "
+            "It never fails this job."
+        ),
         "",
     ]
     if findings:

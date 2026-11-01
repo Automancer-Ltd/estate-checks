@@ -15,8 +15,9 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Iterable, Mapping, Literal
+from typing import Any, Literal
 
 NONE: Literal["none"] = "none"
 CORE: Literal["core"] = "core"
@@ -124,7 +125,7 @@ class Config:
     def from_inputs(cls, docs: str = "", docs_exclude: str = "", full: str = "",
                     small_max_files: str = "", small_max_lines: str = "",
                     core_max_tests: str = "", test_globs: str = "",
-                    docs_include: str = "") -> "Config":
+                    docs_include: str = "") -> Config:
         declared = parse_list(docs)
         return cls(
             docs=[] if declared == ["none"] else (declared or list(DEFAULT_DOCS)),
@@ -272,7 +273,7 @@ CODE_SUFFIXES = (".py", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".mts", ".
 CODE_SHEBANG = re.compile(r"#!.*\b(python|node|deno|bun|ruby)")
 # Neither an argument that skips a file (automancer-ops al-staging-log-purge.sh runs
 # `find ... -not -name 'AGENTS.md'`) nor a systemd unit's `Documentation=` link reads it.
-NOT_READS = re.compile(r"(?:(?:-not|!)\s+-i?name|--exclude(?:-dir)?)[\s=]+\S+|^Documentation=.*", re.M)
+NOT_READS = re.compile(r"(?:(?:-not|!)\s+-i?name|--exclude(?:-dir)?)[\s=]+\S+|^Documentation=.*", re.MULTILINE)
 
 
 def reader_patterns(doc: str) -> list[tuple[str, re.Pattern[str], re.Pattern[str]]]:
@@ -288,7 +289,7 @@ def reader_patterns(doc: str) -> list[tuple[str, re.Pattern[str], re.Pattern[str
         generic = lit.lower() in GENERIC_DOC_NAMES
         quoted, bare = (GENERIC_QUOTED, GENERIC_BARE) if generic else (QUOTED, BARE)
         return (lit, re.compile(quoted + re.escape(lit) + QUOTE_END),
-                re.compile(bare + re.escape(lit) + BARE_END, re.M))
+                re.compile(bare + re.escape(lit) + BARE_END, re.MULTILINE))
     pats = [path(doc)]
     name = doc.rsplit("/", 1)[-1]
     if "/" in doc and name.lower() not in GENERIC_DOC_NAMES:

@@ -5,7 +5,7 @@ requires-python = ">=3.11"
 dependencies = ["PyYAML>=6,<7"]
 
 [dependency-groups]
-dev = ["basedpyright==1.40.2", "ruff==0.14.2", "types-PyYAML>=6,<7"]
+dev = ["basedpyright==1.40.2", "ruff==0.17.3", "types-PyYAML>=6,<7"]
 
 [tool.ruff]
 extend-exclude = ["rules"]
