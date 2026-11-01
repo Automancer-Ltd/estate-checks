@@ -115,6 +115,26 @@ def test_exclusion_hiding_server_code_warns() -> None:
     print("  ✓ Hidden API route and server action warned; browser files (component, src/api fetch layer, game actions) did not.")
 
 
+def test_exclude_patterns_follow_semgrep_anchoring() -> None:
+    print("Testing that exclude-paths anchor like Semgrep: a middle slash pins the pattern to the repo root...")
+    root, base = _diff_repo(
+        {"b.js": "x()\n"},
+        {"apps/x/src/server/auth.ts": "export const a = 1\n", "server/api.ts": "export const b = 2\n"},
+    )
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump({"results": [], "paths": {"scanned": ["b.js"]}, "errors": []}, f)
+    env = dict(os.environ, ESTATE_CHECKS_EXCLUDE_PATHS="src/**, server/**")
+    proc = subprocess.run([sys.executable, SUMMARY_SCRIPT, f.name, "true", base, root], capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    assert "apps/x/src/server/auth.ts" not in proc.stdout, f"anchored 'src/**' must not reach apps/x/src: {proc.stdout}"
+    assert "server/api.ts" in proc.stdout, f"root 'server/**' must still warn: {proc.stdout}"
+    env = dict(os.environ, ESTATE_CHECKS_EXCLUDE_PATHS="src/")
+    proc = subprocess.run([sys.executable, SUMMARY_SCRIPT, f.name, "true", base, root], capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    assert "apps/x/src/server/auth.ts" in proc.stdout, f"bare 'src/' must still match at any depth: {proc.stdout}"
+    print("  ✓ 'src/**' left the nested server dir alone, root 'server/**' warned, and bare 'src/' still matched at depth.")
+
+
 def test_missing_results_file_fails() -> None:
     print("Testing that missing results file fails...")
     path = os.path.join(tempfile.gettempdir(), "missing-semgrep-results-99999.json")
@@ -158,6 +178,7 @@ def main() -> int:
     test_diff_scan_of_code_change_that_scanned_nothing_fails()
     test_diff_scan_of_excluded_change_passes()
     test_exclusion_hiding_server_code_warns()
+    test_exclude_patterns_follow_semgrep_anchoring()
     test_call_site_deduplication()
     print("\nAll self-test validation assertions passed successfully.")
     return 0
