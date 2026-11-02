@@ -27,6 +27,20 @@ red='\033[0;31m'; green='\033[0;32m'; nc='\033[0m'
 # secret added while resolving a merge conflict is scanned too. Copied from
 # Global-Diversity-Practice/maia#507, which was reviewed three times.
 blocked() { echo -e "${red}✗ Push blocked:${nc} $*"; exit 1; }
+zero=0000000000000000000000000000000000000000
+has_commits=0
+while read -r _ local_sha _; do
+  if [[ -n "${local_sha:-}" && "$local_sha" != "$zero" ]]; then
+    has_commits=1
+    break
+  fi
+done <<<"$REFS"
+# A push that only deletes refs (local sha all zeros) or updates no refs pushes
+# no commits, so it needs neither gitleaks nor a destination lookup (t13735).
+if (( ! has_commits )); then
+  echo -e "${green}✓ pre-push secret scan passed${nc}"
+  exit 0
+fi
 # No gitleaks blocks the push (t13562). It used to warn and push anyway, and a
 # branch pushed without a pull request is scanned nowhere else. To push unscanned
 # on purpose, give a reason in ESTATE_PRE_PUSH_UNSCANNED; the hook records it in
@@ -40,11 +54,12 @@ if ! command -v gitleaks >/dev/null 2>&1; then
     exit 1
   fi
   log="$(git rev-parse --git-common-dir)/estate-unscanned-pushes.log"
-  # Never record a credential: drop everything up to the last '@' of the
-  # authority, since a password can carry an unencoded '@' (t13727).
-  dest_shown=$(sed -E 's#(://)[^/]*@#\1#' <<<"$DEST")
+  # Never record a credential: drop userinfo up to the last '@' of the
+  # authority (even with an unencoded '@', t13727) and any '?query' or
+  # '#fragment', leaving only scheme+host+path (t13735).
+  dest_shown=$(sed -E -e 's#(://)[^/?#]*@#\1#' -e 's#[?#].*##' <<<"$DEST")
   while read -r _ local_sha remote_ref _; do
-    [[ -n "${local_sha:-}" ]] || continue
+    [[ -n "${local_sha:-}" && "$local_sha" != "$zero" ]] || continue
     printf '%s\t%s@%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${USER:-${USERNAME:-?}}" \
       "$(hostname 2>/dev/null || echo ?)" "$dest_shown" "$remote_ref" "$local_sha" "${reason//[$'\t\n']/ }" >>"$log"
   done <<<"$REFS"
@@ -66,8 +81,12 @@ fi
 # first so git stops the ssh or https helper it started. Its errors go to a
 # file because such a helper can outlive it and would hold a pipe open.
 # A helper that ignores TERM keeps running after the hook; the push is still
-# blocked on time (t13727). Without perl the lookup has no time limit.
+# blocked on time (t13727). ESTATE_PRE_PUSH_LOOKUP_TIMEOUT must be a positive
+# integer (0 or non-numeric falls back to 30 so alarm(0) never disables the
+# limit), and without perl the lookup runs without a time limit (accepted
+# fallback, t13734, t13735).
 lookup_limit=${ESTATE_PRE_PUSH_LOOKUP_TIMEOUT:-30}
+[[ "$lookup_limit" =~ ^[1-9][0-9]*$ ]] || lookup_limit=30
 lookup_err=$(mktemp); trap 'rm -f "$lookup_err"' EXIT
 bounded() { # <seconds> <command...>; exits 124 when the time runs out
   command -v perl >/dev/null 2>&1 || { "${@:2}"; return; }
@@ -92,7 +111,6 @@ dest_refs=$(bounded "$lookup_limit" git ls-remote -- "$DEST" 2>"$lookup_err") ||
 # Only commits this clone has can be ancestors of what is pushed. No lazy
 # fetch: in a partial clone each missing ref would otherwise be a network fetch.
 held=$(cut -f1 <<<"$dest_refs" | sort -u | GIT_NO_LAZY_FETCH=1 git cat-file --batch-check='%(objectname) %(objecttype)' | awk '$2 == "commit" {print $1}') || blocked "could not read the destination's refs, so nothing was scanned."
-zero=0000000000000000000000000000000000000000
 while read -r local_ref local_sha remote_ref remote_sha; do
   [[ -n "${local_sha:-}" && "$local_sha" != "$zero" ]] || continue  # branch deletion
   # The commits this push adds, and the boundary: the destination's commits they
