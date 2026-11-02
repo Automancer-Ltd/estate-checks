@@ -26,16 +26,65 @@ red='\033[0;31m'; green='\033[0;32m'; nc='\033[0m'
 # history (CI does that where it is configured). `-m` includes merge diffs, so a
 # secret added while resolving a merge conflict is scanned too. Copied from
 # Global-Diversity-Practice/maia#507, which was reviewed three times.
+blocked() { echo -e "${red}✗ Push blocked:${nc} $*"; exit 1; }
+# No gitleaks blocks the push (t13562). It used to warn and push anyway, and a
+# branch pushed without a pull request is scanned nowhere else. To push unscanned
+# on purpose, give a reason in ESTATE_PRE_PUSH_UNSCANNED; the hook records it in
+# the clone's estate-unscanned-pushes.log beside its git config.
 if ! command -v gitleaks >/dev/null 2>&1; then
-  echo -e "${red}!${nc} gitleaks is NOT installed on this device: the pushed commits were not scanned."
-  echo "  Install it before trusting this hook: https://github.com/gitleaks/gitleaks/releases"
+  reason="${ESTATE_PRE_PUSH_UNSCANNED:-}"
+  if [[ -z "${reason//[[:space:]]/}" ]]; then
+    echo -e "${red}✗ Push blocked:${nc} gitleaks is NOT installed on this device, so the pushed commits cannot be scanned."
+    echo "  Install it: https://github.com/gitleaks/gitleaks/releases"
+    echo "  To push unscanned anyway, say why: ESTATE_PRE_PUSH_UNSCANNED='<reason>' git push ..."
+    exit 1
+  fi
+  log="$(git rev-parse --git-common-dir)/estate-unscanned-pushes.log"
+  dest_shown=$(sed -E 's#(://)[^/@]*@#\1#' <<<"$DEST")  # never record a credential in the URL
+  while read -r _ local_sha remote_ref _; do
+    [[ -n "${local_sha:-}" ]] || continue
+    printf '%s\t%s@%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${USER:-${USERNAME:-?}}" \
+      "$(hostname 2>/dev/null || echo ?)" "$dest_shown" "$remote_ref" "$local_sha" "${reason//[$'\t\n']/ }" >>"$log"
+  done <<<"$REFS"
+  echo -e "${red}!${nc} gitleaks is NOT installed: pushing UNSCANNED because ESTATE_PRE_PUSH_UNSCANNED says: ${reason}"
+  echo "  Recorded in ${log}"
   exit 0
 fi
-blocked() { echo -e "${red}✗ Push blocked:${nc} $*"; exit 1; }
 # What the destination already holds, asked of the destination itself. Local
 # remote-tracking refs are not used: they describe the fetch URL, which can
 # differ from the push URL, and they can be stale.
-dest_refs=$(git ls-remote -- "$DEST" 2>&1) || blocked "could not list the destination's refs, so nothing was scanned: $(tail -n 2 <<<"$dest_refs")"
+#
+# The lookup has a time limit (t12392): a destination that accepts the
+# connection and never answers would otherwise hold the push forever. A normal
+# lookup takes about a second (3,082 refs from GitHub, measured 1 Nov 2026 on
+# Windows and Linux), so 30 seconds stops only a stall and still leaves time to
+# type an SSH passphrase. perl does the timing because Linux, macOS and Git for
+# Windows all ship it, and stock macOS has no `timeout`. The lookup stays in
+# the push's process group so prompts still reach the terminal, and gets TERM
+# first so git stops the ssh or https helper it started. Its errors go to a
+# file because such a helper can outlive it and would hold a pipe open.
+lookup_limit=${ESTATE_PRE_PUSH_LOOKUP_TIMEOUT:-30}
+lookup_err=$(mktemp); trap 'rm -f "$lookup_err"' EXIT
+bounded() { # <seconds> <command...>; exits 124 when the time runs out
+  command -v perl >/dev/null 2>&1 || { "${@:2}"; return; }
+  perl -MPOSIX=:sys_wait_h -e '
+    my $limit = shift;
+    my $pid = fork // exit 125;
+    if (!$pid) { exec { $ARGV[0] } @ARGV; exit 127 }
+    $SIG{ALRM} = sub {
+      kill "TERM", $pid;
+      for (1 .. 20) { waitpid($pid, WNOHANG) and exit 124; select undef, undef, undef, 0.1 }
+      kill "KILL", $pid; exit 124;
+    };
+    alarm $limit;
+    waitpid $pid, 0;
+    exit($? & 127 ? 128 + ($? & 127) : $? >> 8);
+  ' "$@"
+}
+lookup=0
+dest_refs=$(bounded "$lookup_limit" git ls-remote -- "$DEST" 2>"$lookup_err") || lookup=$?
+[[ $lookup -ne 124 ]] || blocked "the destination did not answer within ${lookup_limit} seconds, so nothing was scanned."
+[[ $lookup -eq 0 ]] || blocked "could not list the destination's refs, so nothing was scanned: $(tail -n 2 "$lookup_err")"
 # Only commits this clone has can be ancestors of what is pushed. No lazy
 # fetch: in a partial clone each missing ref would otherwise be a network fetch.
 held=$(cut -f1 <<<"$dest_refs" | sort -u | GIT_NO_LAZY_FETCH=1 git cat-file --batch-check='%(objectname) %(objecttype)' | awk '$2 == "commit" {print $1}') || blocked "could not read the destination's refs, so nothing was scanned."
