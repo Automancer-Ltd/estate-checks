@@ -40,7 +40,9 @@ if ! command -v gitleaks >/dev/null 2>&1; then
     exit 1
   fi
   log="$(git rev-parse --git-common-dir)/estate-unscanned-pushes.log"
-  dest_shown=$(sed -E 's#(://)[^/@]*@#\1#' <<<"$DEST")  # never record a credential in the URL
+  # Never record a credential: drop everything up to the last '@' of the
+  # authority, since a password can carry an unencoded '@' (t13727).
+  dest_shown=$(sed -E 's#(://)[^/]*@#\1#' <<<"$DEST")
   while read -r _ local_sha remote_ref _; do
     [[ -n "${local_sha:-}" ]] || continue
     printf '%s\t%s@%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${USER:-${USERNAME:-?}}" \
@@ -63,6 +65,8 @@ fi
 # the push's process group so prompts still reach the terminal, and gets TERM
 # first so git stops the ssh or https helper it started. Its errors go to a
 # file because such a helper can outlive it and would hold a pipe open.
+# A helper that ignores TERM keeps running after the hook; the push is still
+# blocked on time (t13727). Without perl the lookup has no time limit.
 lookup_limit=${ESTATE_PRE_PUSH_LOOKUP_TIMEOUT:-30}
 lookup_err=$(mktemp); trap 'rm -f "$lookup_err"' EXIT
 bounded() { # <seconds> <command...>; exits 124 when the time runs out
