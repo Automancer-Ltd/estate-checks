@@ -20,6 +20,8 @@ jobs:
       - uses: actions/checkout@v7
       - id: tier
         uses: ./tier
+        with:
+          ci-full: ${{ vars.CI_FULL }}
       - name: Show the tier
         env:
           TIER: ${{ steps.tier.outputs.tier }}
