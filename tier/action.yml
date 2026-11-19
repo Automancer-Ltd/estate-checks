@@ -46,7 +46,7 @@ inputs:
     required: false
     default: 'ci tier'
   ci-full:
-    description: 'Optional. Any non-empty value runs the full suite. Pass the repository variable: ci-full: ${{ vars.CI_FULL }} (the `vars` context is not available inside an action). A workflow-level env: CI_FULL does the same.'
+    description: 'Optional. Any non-empty value runs the full suite. Pass the repository variable CI_FULL from the workflow (the vars context is not available inside an action); a workflow-level env named CI_FULL does the same.'
     required: false
     default: ''
   token:
