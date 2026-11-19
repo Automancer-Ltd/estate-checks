@@ -1,0 +1,28 @@
+name: tier-proof
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    tags: ['t20703-proof-*']
+concurrency:
+  group: tier-proof-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+  checks: read
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - id: tier
+        uses: ./tier
+      - name: Show the tier
+        env:
+          TIER: ${{ steps.tier.outputs.tier }}
+          REASON: ${{ steps.tier.outputs.reason }}
+          TESTS: ${{ steps.tier.outputs.direct-tests }}
+        run: echo "PROOF tier=$TIER tests=$TESTS reason=$REASON"
