@@ -10,11 +10,28 @@ rules, not a model: the same change always gets the same answer.
 
 | Tier | When | The repo runs |
 |---|---|---|
-| `none` | every changed file is documentation that no code reads, **or** a push to the default branch whose tree is exactly what the merged PR's run passed, or differs from the tree that run passed only by such documentation | nothing but the gate |
+| `none` | a pull request whose every changed file is documentation that no code reads | nothing but the gate |
 | `core` | at most `small-max-files` non-doc files and `small-max-lines` changed lines, nothing that always needs the full suite, and at most `core-max-tests` test files naming the changed code | its quick job: lint, typecheck, and the tests in `direct-tests` (target under 2–3 minutes) |
-| `standard` | everything else, any other event, and any classification failure | its normal CI |
+| `standard` | everything else, any event but a pull request (a manual dispatch, a push to the default branch, a tag), and any classification failure | its normal CI |
 
-The label `ci:full` on a pull request forces `standard`.
+The label `ci:full` on a pull request forces `standard`, and so does a repository
+variable `CI_FULL` with any non-empty value. An action cannot read the `vars` context, so the
+workflow passes it: `ci-full: ${{ vars.CI_FULL }}` as an input of the tier step (a workflow-level
+`env: CI_FULL: ${{ vars.CI_FULL }}` works too). A repository that has not added that line ignores the variable.
+
+**Release proofs.** A dispatch, a push to the default branch and a tag are always `standard`, whatever
+the diff or an earlier pull-request run says, so a green run of the exact tree on those events means the
+full suite ran (t20703). The pull-request-to-main "already tested" skip no longer exists.
+
+**Unsure means full.** The quick job's test list comes from a name search, not the test runner's
+dependency graph. Where the search cannot place a change with confidence the tier is `standard`:
+any deleted or renamed code file; a test fixture, helper, mock or setup file (by folder or name) that
+not exactly one test file names; a changed code file that no test names; a test file the scan could not read.
+
+**The `reason` output holds text that came from a pull request** (file names, labels, error text).
+The classifier cuts it to letters, digits, space and `. , : / # + = _ -` at the source, but a workflow must
+still never write `${{ steps.tier.outputs.reason }}` into a `run:` script. Pass it as `env:`
+(`env: { REASON: "${{ steps.tier.outputs.reason }}" }`) and read `"$REASON"`.
 
 ## Zero configuration by default
 
@@ -151,34 +168,11 @@ filter must run its step on `[]`:
 ## How each tier is decided
 
 - **Pull request:** the PR's file list from the REST API. A rename counts as
-  both its old and new path, so moving code into `docs/` is not docs.
-- **Push to the default branch:** the action finds the merged PR head (a merge
-  commit's second parent; for a squash or rebase merge, GitHub's link from the
-  commit to its PR, which can lag the merge by seconds), reads the
-  tree its passing run recorded (a `ci-tier` notice annotation on this job,
-  `tested-tree=<sha>`), and compares it with the pushed commit's tree. Equal
-  trees mean the exact code on main already passed, so the tier is `none`.
-  Otherwise main moved while the PR waited, and the files that differ between
-  the two trees are all that went untested: documentation alone (a release PR's
-  changelog, plan notes) gives `none`, for merge, squash and rebase merges alike
-  and even when the PR itself changed CI. Code in that difference runs the
-  tier of the PR's diff; for a merge commit, the code main holds beyond the
-  head joins it, which keeps the merge-skew check (two PRs that pass alone but
-  clash together). With no passing PR run, the before...after diff is
-  classified alone.
-- **Dispatch on the default branch** (`deploy-on-main`'s `dispatch-ci`, for a
-  merge no PR run proved): as a push, from the newest first-parent ancestor
-  that CI proved (a passing push or dispatch run of this workflow, or exactly a
-  tree a PR run passed; a docs-only difference from one is not proof), so any unproved commit in between joins the diff. Because that
-  ancestor is proven, a merge whose diff from it is documentation alone gives
-  `none` without the code main gained while the PR waited. No proven ancestor in
-  20 commits gives `standard`. Every run records its tier in a `ci-tier` notice
-  (`tier=<tier>`, plus `tested-tree=` on a PR); automancer-ops `ci-proof.sh`
-  accepts a dispatch whose record reads `tier=none` as deploy proof, because only
-  tier and gate run then (t6378).
-- **Anything else** (`workflow_dispatch` on another branch, `schedule`, a force push, a new
-  branch, an API error, a failed checkout, more than 300 changed files on a
-  push): `standard`. The action never fails the job.
+  both its old and new path, so moving code into `docs/` is not docs, and a
+  renamed or deleted code file is `standard`.
+- **Push to the default branch, dispatch, tag:** `standard`, with no API read. `ci-proof.sh` style
+  release proofs can rely on the `ci-tier` notice reading `tier=standard` for these events.
+- **Anything else** (`schedule`, another branch, an API error, a failed checkout): `standard`. The action never fails the job.
 
 ## Wiring a workflow
 
@@ -205,6 +199,7 @@ jobs:
         uses: Automancer-Ltd/estate-checks/tier@v1
         with:
           job-name: check
+          ci-full: ${{ vars.CI_FULL }}
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
