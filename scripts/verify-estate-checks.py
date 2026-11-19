@@ -242,7 +242,7 @@ def verify(evidence: Path) -> None:
                          '      - run: curl https://example.invalid\n' if bad else
                          'on: pull_request\nconcurrency: ci\njobs:\n  check:\n'
                          '    runs-on: ${{ fromJSON(vars.CI_RUNNER) }}\n'
-                         '    timeout-minutes: 10\n    steps:\n      - run: echo ok\n')}
+                         '    timeout-minutes: 20\n    steps:\n      - run: echo ok\n')}
                 base = fixture(work, files)
                 event = dest / "event.json"
                 event.write_text(json.dumps({"pull_request": {"base": {"sha": base}}}))
@@ -284,7 +284,7 @@ def verify(evidence: Path) -> None:
             install_workflow = ("on: pull_request\nconcurrency: ci\njobs:\n  check:\n"
                                 "    runs-on: ${{ fromJSON(vars.CI_RUNNER) }}\n    steps:\n"
                                 "      - name: Install tools\n")
-            bounded_step = "        timeout-minutes: 3\n"
+            bounded_step = "        timeout-minutes: 10\n"
             install_step = ("        run: |\n          set -euo pipefail\n"
                             "          pip install --quiet requests\n          npm ci\n")
             def install_case(name: str, bounded: bool, skip: bool) -> dict[str, Any]:
