@@ -62,7 +62,7 @@ whatever `fail-on-findings` says for the unbounded-call scan.
 | Annotation | Rule | What is wrong |
 | --- | --- | --- |
 | `job-missing-timeout` | 1 | a job declares no `timeout-minutes` (GitHub's default is 360 minutes) |
-| `job-timeout-over-cap` | 1 | a job declares more than the 10-minute absolute cap |
+| `job-timeout-below-floor` | 1 | a job's `timeout-minutes` (a literal, or a value an expression can choose with `&&`/`\|\|`) is below the 20-minute floor |
 | `workflow-missing-concurrency` | 2 | a workflow declares no `concurrency:` group |
 | `workflow-concurrency-no-group` | 2 | a concurrency block carries no non-empty `group` |
 | `push-unfiltered` | 3 | `push:` carries no `branches`/`branches-ignore` filter, so every branch push bills the whole matrix twice |
@@ -71,8 +71,8 @@ whatever `fail-on-findings` says for the unbounded-call scan.
 | `workflow-schedule-trigger` | 3 | `on:` includes `schedule`, so the workflow runs on a timer. Checks run once per change, on the pull request |
 | `workflow-unparsable` | — | the workflow could not be parsed, so it was not checked (never a silent pass) |
 
-The two rules that need judgement stay in the skill, not here: the five-minute routine budget is measured
-over a whole run (this check only reads the declared limits), and a deploy scheduler keeping its own
+The two rules that need judgement stay in the skill, not here: the five-minute target for a warm run is
+measured over a whole run and never enforced by cancelling (this check only reads the declared limits), and a deploy scheduler keeping its own
 group with `cancel-in-progress: false` is correct while a test workflow needs the standard block.
 
 What the check deliberately does not judge, because a warning that is wrong gets ignored:
@@ -81,8 +81,11 @@ What the check deliberately does not judge, because a warning that is wrong gets
   `ubuntu-latest` there is correct and is not reported. Every organisation repository is.
 - **Expressions and self-hosted labels.** `runs-on: ${{ matrix.os }}`, `runs-on: [self-hosted, linux]`
   and a literal that is not a hosted label are left alone; only a hosted-label literal is reported.
-- **Timeouts between 5 and 10 minutes.** Whether a workflow is an extended suite is not visible in
-  its YAML, so only the absence of a limit and a value above the 10-minute cap are reported.
+- **Timeouts at or above the floor.** A time limit only stops a stuck job (Waseem, 19 Nov 2026: speed
+  is a measured target, never enforced by cancelling; a limit near the normal run time cancels honest
+  cold runs and pays for re-runs). 20 is the floor; 30 for an extended or release-proof job and three
+  times a measured cold run are both legitimate and not visible in YAML, so nothing above 20 is
+  judged. An expression with no literal value (`${{ fromJSON(vars.X) }}`) is not judged either.
 - **`branches-ignore`, tag-only `push:`, and concurrency keys.** A `push:` with only `tags:` does not
   double-bill branch work, and a different group key may be right for a deploy workflow.
 - **The wrong-branch refinement needs the default branch.** It comes from the event payload; when it
@@ -134,15 +137,19 @@ in the pull request that introduces it is the point. `fail-on-findings` does not
 check that cannot run (PyYAML missing, a workflow that will not parse, a malformed allowlist row)
 fails loudly for the same reason.
 
-The fix is one line in the caller's workflow:
+The fix is the job's own `timeout-minutes`, which every job declares anyway (rule 1) and which
+bounds every step in it:
 
 ```yaml
-      - name: Install tools
-        timeout-minutes: 3
-        run: pip install --quiet -r requirements.txt
+  build:
+    timeout-minutes: 20
+    steps:
+      - run: pip install --quiet -r requirements.txt
 ```
 
-A `timeout-minutes` on the job bounds every step in it and satisfies the check for the whole job.
+A step limit is optional. If you add one, it guards a hang and sits at several times the install's
+slowest honest time (a cold cache, a slow mirror), never near its normal time: an install cut off
+while it is still downloading fails a correct change and pays for a re-run.
 
 ### Deliberate exceptions
 
