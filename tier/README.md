@@ -15,8 +15,9 @@ rules, not a model: the same change always gets the same answer.
 | `standard` | everything else, any event but a pull request (a manual dispatch, a push to the default branch, a tag), and any classification failure | its normal CI |
 
 The label `ci:full` on a pull request forces `standard`, and so does a repository
-variable `CI_FULL` with any non-empty value (set it in the repository's Actions variables; the
-action reads `vars.CI_FULL`).
+variable `CI_FULL` with any non-empty value. An action cannot read the `vars` context, so the
+workflow passes it: `ci-full: ${{ vars.CI_FULL }}` as an input of the tier step (a workflow-level
+`env: CI_FULL: ${{ vars.CI_FULL }}` works too). A repository that has not added that line ignores the variable.
 
 **Release proofs.** A dispatch, a push to the default branch and a tag are always `standard`, whatever
 the diff or an earlier pull-request run says, so a green run of the exact tree on those events means the
@@ -198,6 +199,7 @@ jobs:
         uses: Automancer-Ltd/estate-checks/tier@v1
         with:
           job-name: check
+          ci-full: ${{ vars.CI_FULL }}
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
