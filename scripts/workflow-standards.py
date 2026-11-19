@@ -5,10 +5,17 @@ The ci-standards skill's first four rules are structural and mechanical, so they
 belong in a guard, not in 27 KB of incident prose. This check reads
 ``.github/workflows/*.yml`` in the repository it runs in and annotates:
 
-1. ``job-missing-timeout`` / ``job-timeout-over-cap`` — every job declares
-   ``timeout-minutes``, and none declares more than the 10-minute cap. A job
-   that only calls a reusable workflow (``uses:``) is exempt: workflow syntax
-   bans the key on a caller job, and the called workflow bounds its own jobs.
+1. ``job-missing-timeout`` / ``job-timeout-below-floor`` — every job declares
+   ``timeout-minutes``, and none declares less than the 20-minute floor. A
+   time limit only stops a stuck job; speed is a measured target, never
+   enforced by cancelling (Waseem, 19 Nov 2026): a limit near the normal run
+   time cancels honest cold runs and pays for re-runs. A literal is read
+   directly; in an expression, each value chosen by ``&&`` or ``||`` (the
+   ``cond && 30 || 20`` form) is read. Above the floor nothing is judged: an
+   extended or release-proof job (30) and three times a measured cold run are
+   both legitimate and invisible in YAML. A job that only calls a reusable
+   workflow (``uses:``) is exempt: workflow syntax bans the key on a caller
+   job, and the called workflow bounds its own jobs.
 2. ``workflow-missing-concurrency`` / ``workflow-concurrency-no-group`` — every
    workflow declares a concurrency group.
 3. ``push-unfiltered`` / ``push-wrong-branch`` — ``push:`` carries a branch
@@ -41,14 +48,16 @@ from workflow_yaml import Finding, escape, find, items, load_yaml, workflow_file
 if TYPE_CHECKING:
     from yaml.nodes import Node
 
-TIMEOUT_CAP_MINUTES = 10
+TIMEOUT_FLOOR_MINUTES = 20
+# The values an expression can choose: ``cond && 30 || 20`` picks 30 or 20.
+EXPRESSION_VALUE = re.compile(r"(?:&&|\|\|)\s*\(?\s*(\d+)\b")
 # Personal repositories run on GitHub-hosted runners (ci-standards, rule 4).
 PERSONAL_OWNERS = {"Waseemilyas"}
 HOSTED_LABEL = re.compile(r"^(ubuntu|macos|windows|blacksmith)-")
 
 TITLES = {
     "job-missing-timeout": "Job declares no timeout-minutes",
-    "job-timeout-over-cap": "Timeout above the 10-minute cap",
+    "job-timeout-below-floor": "Timeout below the 20-minute floor",
     "workflow-missing-concurrency": "Workflow declares no concurrency group",
     "workflow-concurrency-no-group": "Concurrency group is empty",
     "push-unfiltered": "push is not filtered to a branch",
@@ -93,22 +102,33 @@ def _check_jobs(doc: Node, path: str, owner: str, findings: list[Finding]) -> No
                     path,
                     job_line,
                     f"{_job_label(job_key)} declares no timeout-minutes. Add "
-                    "`timeout-minutes:` (at most 5 in routine CI, at most 10 in an "
-                    "extended suite); with none declared GitHub allows 360 minutes.",
+                    "`timeout-minutes:` to stop a stuck job: 20, 30 for an extended or "
+                    "release-proof job, or three times the measured cold run when that is "
+                    "more; with none declared GitHub allows 360 minutes.",
                 )
             )
         else:
             values = _scalars(timeout)
-            raw = values[0] if values else ""
-            if raw.strip().isdigit() and int(raw) > TIMEOUT_CAP_MINUTES:
+            raw = (values[0] if values else "").strip()
+            if raw.isdigit():
+                chosen = [int(raw)]
+            elif "${{" in raw:
+                chosen = [int(v) for v in EXPRESSION_VALUE.findall(raw)]
+            else:
+                chosen = []
+            low = [v for v in chosen if v < TIMEOUT_FLOOR_MINUTES]
+            if low:
                 findings.append(
                     Finding(
-                        "job-timeout-over-cap",
+                        "job-timeout-below-floor",
                         path,
                         timeout_line,
-                        f"{_job_label(job_key)} declares timeout-minutes: {int(raw)}, above "
-                        f"the {TIMEOUT_CAP_MINUTES}-minute absolute cap. Diagnose and tune the "
-                        "slow step; do not raise the limit.",
+                        f"{_job_label(job_key)} can set timeout-minutes to {min(low)}, below "
+                        f"the {TIMEOUT_FLOOR_MINUTES}-minute floor. A time limit only stops a "
+                        "stuck job and sits well above the slowest honest run, cold cache "
+                        "included: 20, 30 for an extended or release-proof job, or three times "
+                        "the measured cold run when that is more. Five minutes is a target for "
+                        "a warm run, measured, never enforced by cancelling.",
                     )
                 )
 

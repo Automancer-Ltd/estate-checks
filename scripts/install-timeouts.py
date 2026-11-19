@@ -183,8 +183,9 @@ def _check_jobs(
                         "with no timeout-minutes on the step or the job. An install that "
                         "stalls holds the job until its limit (360 minutes with none "
                         "declared); the automancer-ops release check died this way on "
-                        "19 Oct 2026. Add `timeout-minutes:` to the step (or the job). A "
-                        "deliberate exception is a row in install-timeout-allowlist.tsv "
+                        "19 Oct 2026. Add the job's `timeout-minutes:` (20 or more; it bounds "
+                        "every step). A step limit, if any, sits at several times the install's "
+                        "slowest honest time, never near its normal time. A deliberate exception is a row in install-timeout-allowlist.tsv "
                         "in Automancer-Ltd/estate-checks.",
                     )
                 )
