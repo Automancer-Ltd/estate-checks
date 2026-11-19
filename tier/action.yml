@@ -83,6 +83,7 @@ runs:
         INPUT_CORE_MAX_TESTS: ${{ inputs.core-max-tests }}
         INPUT_TEST_GLOBS: ${{ inputs.test-globs }}
         INPUT_JOB_NAME: ${{ inputs.job-name }}
+        INPUT_CI_FULL: ${{ vars.CI_FULL }}
         INPUT_TOKEN: ${{ inputs.token }}
       run: python3 "$GITHUB_ACTION_PATH/classify.py"
 

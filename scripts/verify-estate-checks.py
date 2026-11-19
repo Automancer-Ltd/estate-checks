@@ -135,7 +135,7 @@ def verify(evidence: Path) -> None:
                 ("docs", {"docs/guide.md": "Guide\n"}, "docs/guide.md", 1, {}, [], "none", []),
                 ("small", common, "src/cost.ts", 1, {}, [], "core", ["tests/cost.test.ts"]),
                 ("unmatched-source", {"src/new.ts": "export const value = 1;\n"},
-                 "src/new.ts", 1, {}, [], "core", []),
+                 "src/new.ts", 1, {}, [], "standard", []),
                 ("convex", {"convex/feedback.ts": "export const submit = 1;\n",
                             "tests/access.test.ts": "t.mutation(api.feedback.submit, {});\n"},
                  "convex/feedback.ts", 1, {}, [], "core", ["tests/access.test.ts"]),
@@ -188,33 +188,18 @@ def verify(evidence: Path) -> None:
                 assert json.loads(outputs["touched-files"]) == [changed], (name, outputs)
                 results.append({"journey": name, "outputs": outputs})
 
-            for name in ("tested-push", "merge-skew", "docs-moved", "api-failure", "dispatch"):
+            # Release events always run everything, and need no API read (t20703); an API
+            # failure on a pull request falls back to the same answer.
+            for name in ("push-main", "tag", "dispatch", "api-failure"):
                 dest = evidence / name
                 dest.mkdir()
                 work = scratch / name
                 fixture(work, common)
                 event = dest / "event.json"
-                event.write_text(json.dumps({"ref": "refs/heads/main", "before": "b" * 40,
-                    "after": "a" * 40, "repository": {"default_branch": "main"},
+                event.write_text(json.dumps({"ref": "refs/tags/v1.0.0" if name == "tag" else "refs/heads/main",
+                    "before": "b" * 40, "after": "a" * 40, "repository": {"default_branch": "main"},
                     "pull_request": {"number": 3, "labels": []}}))
-                moved = "CHANGELOG.md" if name == "docs-moved" else "src/cost.ts"
-                # A GitHub merge commit names the PR head as its second parent. No commit-to-PR
-                # route: GitHub fills that in only seconds after a merge, so it must not be needed.
-                ApiServer.routes = {
-                    "actions/workflows/ci.yml/runs": {"workflow_runs": [{"id": 99}]},
-                    "actions/runs/99/jobs": {"jobs": [{"name": "ci tier", "id": 5}]},
-                    "check-runs/5/annotations": [{"title": "ci-tier", "message": "tested-tree=" + TREE}],
-                    "git/commits/" + "a" * 40: {"tree": {"sha": TREE if name == "tested-push" else "2" * 40},
-                                                "parents": [{"sha": "b" * 40}, {"sha": "h" * 40}]},
-                    "compare/" + "b" * 40 + "..." + "a" * 40: {"files": [
-                        {"filename": "src/cost.ts", "additions": 51, "deletions": 0}]},
-                    # What main holds beyond the PR's passed head: code, or only a changelog.
-                    "compare/" + "h" * 40 + "..." + "a" * 40: {"status": "ahead", "files": [
-                        {"filename": moved, "additions": 51, "deletions": 0}]},
-                    **{"git/trees/" + tree: {"tree": [
-                        {"path": p, "type": "blob", "mode": "100644", "sha": tree if p == moved else "1" * 40}
-                        for p in ("CHANGELOG.md", "src/cost.ts")]} for tree in (TREE, "2" * 40)},
-                }
+                ApiServer.routes = {}
                 env = {**os.environ, "GITHUB_EVENT_NAME": "workflow_dispatch" if name == "dispatch" else
                        "pull_request" if name == "api-failure" else "push", "GITHUB_SHA": TREE,
                        "GITHUB_EVENT_PATH": str(event), "GITHUB_REPOSITORY": REPO,
@@ -223,8 +208,7 @@ def verify(evidence: Path) -> None:
                        "GITHUB_WORKSPACE": str(work), "RUNNER_TEMP": str(dest),
                        "GITHUB_STEP_SUMMARY": str(dest / "summary.md")}
                 code, outputs = action(ROOT / "tier/action.yml", work, dest, env)
-                assert code == 0 and outputs["tier"] == (
-                    "none" if name in ("tested-push", "docs-moved") else "standard"), outputs
+                assert code == 0 and outputs["tier"] == "standard", outputs
                 results.append({"journey": name, "outputs": outputs})
 
             def scan_case(name: str, bad: bool, strict: bool) -> dict[str, Any]:

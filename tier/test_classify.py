@@ -8,7 +8,6 @@ import os
 import subprocess
 import tempfile
 import unittest
-from typing import ClassVar
 
 from classify import CORE, NONE, STANDARD, ChangedFile, Config, classify, main
 
@@ -26,7 +25,7 @@ class Classify(unittest.TestCase):
             ("markdown under src/ is product", [f("app/src/styles/README.md")], CORE),
             ("markdown under skills/ is product", [f("skills/x/SKILL.md")], CORE),
             ("markdown test fixtures", [f("tests/fixtures/a.md")], CORE),
-            ("code renamed into docs/", [f("docs/old.md", 0, prev="convex/turn.ts")], CORE),
+            ("code renamed into docs/", [f("docs/old.md", 0, prev="convex/turn.ts")], STANDARD),
             ("docs plus small code", [f("docs/a.md", 900), f("app/x.ts", 10)], CORE),
             ("lockfile", [f("pnpm-lock.yaml", 1)], STANDARD),
             ("nested package.json", [f("apps/web/package.json", 1)], STANDARD),
@@ -67,7 +66,7 @@ class Classify(unittest.TestCase):
         self.assertEqual(classify([f(".agents/skills/other/SKILL.md", 80)], included)[0], STANDARD)
         self.assertEqual(classify([f(".github/workflows/ci.yml", 1)], included)[0], STANDARD)
         renamed = f(".agents/skills/verify-dissidium/SKILL.md", 1, prev="src/README.md")
-        self.assertEqual(classify([renamed], included)[0], CORE)
+        self.assertEqual(classify([renamed], included)[0], STANDARD)
         broad = Config.from_inputs(docs_include="**")
         for path in ("src/README.md", "content/posts/a.md", "pages/home.md", "public/notes.md",
                      "tests/fixtures/a.md", "app/src/styles/README.md"):
@@ -251,8 +250,8 @@ class PullRequest(unittest.TestCase):
         self.assertEqual(run_main("pull_request", event, routes, repo_files=None)["tier"], STANDARD)
 
     def test_core_tier_hands_over_the_files_that_still_exist(self):
-        event, routes = pr([changed("app/a.ts", 3), changed("app/gone.ts", 0, "removed"), changed("README.md")])
-        result = run_main("pull_request", event, routes, {"app/a.ts": "", "README.md": ""})
+        event, routes = pr([changed("app/a.ts", 3), changed("README.md")])
+        result = run_main("pull_request", event, routes, {"app/a.ts": "", "README.md": "", "app/a.test.ts": ""})
         self.assertEqual(result["tier"], CORE)
         self.assertEqual(json.loads(result["changed-files"]), ["README.md", "app/a.ts"])
 
@@ -265,7 +264,7 @@ class PullRequest(unittest.TestCase):
         want = ["apps/portal/new.ts", "apps/portal/old.ts", "apps/tracker/src/a.ts", "packages/lifecycles/src/gone.ts"]
         event, routes = pr(files)
         core = run_main("pull_request", event, routes, {"apps/tracker/src/a.ts": "", "apps/portal/new.ts": ""})
-        self.assertEqual(core["tier"], CORE)
+        self.assertEqual(core["tier"], STANDARD)
         self.assertEqual(json.loads(core["changed-files"]), ["apps/portal/new.ts", "apps/tracker/src/a.ts"])
         self.assertEqual(json.loads(core["touched-files"]), want)
         event, routes = pr(files + [changed("pnpm-lock.yaml", 400)])
@@ -297,7 +296,7 @@ class PullRequest(unittest.TestCase):
                           "tests/unit/py_test.py"])
 
     def test_convex_generated_api_calls_select_the_access_control_tests(self):
-        for module, status in (("feedback", "modified"), ("feedback", "removed"),
+        for module, status in (("feedback", "modified"),
                                ("pipeline/data", "modified"), ("admin/reports/feedback", "modified"),
                                ("reports/index", "modified")):
             for namespace in ("api", "internal"):
@@ -335,16 +334,17 @@ class PullRequest(unittest.TestCase):
                 self.assertEqual(result["tier"], STANDARD)
                 self.assertEqual(json.loads(result["direct-tests"]), [])
 
-    def test_deleted_or_renamed_code_selects_the_tests_that_still_name_it(self):
-        # A test left importing a deleted or renamed module fails on main; core ran none of it.
+    def test_deleted_or_renamed_code_runs_the_full_suite(self):
+        # A test left importing a deleted or renamed module fails on main, and no name search
+        # can see what else used it (t20703): any deleted or renamed code file is standard.
         renamed = {"filename": "lib/new.py", "previous_filename": "lib/old.py", "additions": 1, "deletions": 1,
                    "status": "renamed"}
-        event, routes = pr([changed("lib/foo.py", 40, "removed"), renamed])
-        repo = {"lib/new.py": "", "tests/test_foo.py": "from lib.foo import x\n",
-                "tests/test_old.py": "from lib.old import y\n", "tests/test_other.py": "from lib.bar import z\n"}
-        result = run_main("pull_request", event, routes, repo)
-        self.assertEqual(result["tier"], CORE)
-        self.assertEqual(json.loads(result["direct-tests"]), ["tests/test_foo.py", "tests/test_old.py"])
+        repo = {"lib/new.py": "", "tests/test_foo.py": "from lib.foo import x\n", "lib/bar.py": ""}
+        for files in ([changed("lib/foo.py", 40, "removed")], [renamed]):
+            event, routes = pr(files)
+            result = run_main("pull_request", event, routes, repo)
+            self.assertEqual(result["tier"], STANDARD)
+            self.assertIn("code file", result["reason"])
 
     def test_a_line_break_in_a_file_name_cannot_rewrite_the_tier(self):
         event, routes = pr([changed("postgres\ntier=none\nz=")])
@@ -423,165 +423,88 @@ class PullRequest(unittest.TestCase):
         self.assertEqual(json.loads(result["direct-tests"]), ["tests/notes.test.ts"])
 
 
-PUSH = {"ref": "refs/heads/main", "before": BEFORE, "after": AFTER, "repository": {"default_branch": "main"}}
+PUSH = {"ref": "refs/heads/main", "before": "b" * 40, "after": "a" * 40, "repository": {"default_branch": "main"}}
 
 
-def push_routes(pushed_tree, compare_files, moved_files=None):
-    """compare_files is the merged PR's diff; moved_files is what the pushed tree holds
-    beyond the tree the PR run tested (and, for a merge commit, beyond its head)."""
-    moved = compare_files if moved_files is None else moved_files
-    tested = {"app/a.ts": "1", "CHANGELOG.md": "1", "README.md": "1"}
-    pushed = {**tested, **{m["filename"]: "2" for m in moved}}
+class ReleaseEvents(unittest.TestCase):
+    """t20703: a release proof rests on these events, so none of them may be tiered, whatever
+    the diff or an earlier passing pull-request run says. No API route is given: none is read."""
 
-    def tree(files):
-        return {"truncated": False, "tree": [{"path": "app", "type": "tree", "mode": "040000", "sha": "t"}] + [
-            {"path": p, "type": "blob", "mode": "100644", "sha": sha} for p, sha in files.items()]}
-    return {
-        f"commits/{AFTER}/pulls": [{"number": 7, "merged_at": "x", "merge_commit_sha": AFTER, "head": {"sha": HEAD}}],
-        "actions/workflows/ci.yml/runs": {"workflow_runs": [{"id": 99}]},
-        "actions/runs/99/jobs": {"jobs": [{"name": "ci tier", "id": 5}]},
-        "check-runs/5/annotations": [{"title": "ci-tier", "message": f"tier=standard tested-tree={TESTED_TREE}"}],
-        f"git/commits/{AFTER}": {"tree": {"sha": pushed_tree}},
-        f"git/trees/{TESTED_TREE}": tree(tested),
-        f"git/trees/{pushed_tree}": tree(pushed),
-        f"compare/{BEFORE}...{AFTER}": {"files": compare_files},
-        f"compare/{HEAD}...{AFTER}": {"status": "ahead", "files": moved},
-    }
+    def test_dispatch_push_to_the_default_branch_and_a_tag_run_the_full_suite(self):
+        cases = [
+            ("workflow_dispatch", {"ref": "refs/heads/main", "repository": {"default_branch": "main"}}),
+            ("workflow_dispatch", {"ref": "refs/heads/other", "repository": {"default_branch": "main"}}),
+            ("push", PUSH),
+            ("push", {**PUSH, "ref": "refs/tags/v1.2.3"}),
+            ("schedule", {}),
+        ]
+        for name, event in cases:
+            with self.subTest(name=name, ref=event.get("ref")):
+                result = run_main(name, event, {}, {"README.md": ""})
+                self.assertEqual(result["tier"], STANDARD)
 
-
-class PushToMain(unittest.TestCase):
-    code: ClassVar[list[ChangedFile]] = [changed("app/a.ts", 100)]
-
-    def test_skips_when_main_tree_is_exactly_what_the_pr_passed(self):
-        self.assertEqual(run_main("push", PUSH, push_routes(TESTED_TREE, self.code))["tier"], NONE)
-
-    def test_skips_after_a_partial_rerun_of_the_pr_run(self):
-        # Re-running failed jobs gives the latest attempt a fresh copy of the tier
-        # job with no annotation; the tested tree lives on the first attempt's job.
-        routes = push_routes(TESTED_TREE, self.code)
-        del routes["actions/runs/99/jobs"]
-        routes = {"actions/runs/99/jobs?filter=latest": {"jobs": [{"name": "ci tier", "id": 6}]},
-                  "actions/runs/99/jobs?filter=all": {"jobs": [{"name": "ci tier", "id": 6},
-                                                               {"name": "ci tier", "id": 5}]},
-                  "check-runs/6/annotations": [], **routes}
-        self.assertEqual(run_main("push", PUSH, routes)["tier"], NONE)
-
-    def test_skips_when_the_tier_job_has_another_name(self):
-        # chief-of-staff's one job is "ci gate" and passes no job-name; its exactly
-        # tested pushes ran the full suite (run 39654364400, 21 Oct 2026).
-        routes = push_routes(TESTED_TREE, self.code)
-        routes["actions/runs/99/jobs"] = {"jobs": [{"name": "ci gate", "id": 5}]}
-        self.assertEqual(run_main("push", PUSH, routes)["tier"], NONE)
-
-    def test_code_that_moved_main_since_the_pr_passed_runs_its_tier(self):
-        routes = push_routes(OTHER_TREE, [changed("CHANGELOG.md")], moved_files=self.code)
-        self.assertEqual(run_main("push", PUSH, routes, {"CHANGELOG.md": ""})["tier"], STANDARD)
-
-    def test_only_docs_moved_main_since_the_pr_passed_runs_nothing(self):
-        # ops, 21 Oct 2026: 21 of 44 push runs re-ran the full suite because a release
-        # PR's changelog landed between the PR's passing run and its merge.
-        routes = push_routes(OTHER_TREE, self.code, moved_files=[changed("CHANGELOG.md", 4)])
-        self.assertEqual(run_main("push", PUSH, routes, {"CHANGELOG.md": ""})["tier"], NONE)
-
-    def test_squash_merge_of_a_ci_change_after_docs_moved_main_runs_nothing(self):
-        # t6084: automancer-auto PR #389 changed ci.yml and was squash-merged after
-        # plans/ docs landed; the push re-ran the full suite (run 39658252274).
-        routes = push_routes(OTHER_TREE, [changed(".github/workflows/ci.yml", 3), changed("plans/x.md", 9)],
-                             moved_files=[changed("plans/x.md", 9)])
-        routes[f"compare/{HEAD}...{AFTER}"] = {"status": "diverged", "files": []}
-        result = run_main("push", PUSH, routes, {"plans/x.md": "", ".github/workflows/ci.yml": ""})
-        self.assertEqual(result["tier"], NONE)
-
-    def test_squash_merge_after_code_moved_main_runs_its_tier(self):
-        routes = push_routes(OTHER_TREE, [changed(".github/workflows/ci.yml", 3)],
-                             moved_files=[changed("plans/x.md", 9), changed("app/b.ts", 2)])
-        routes[f"compare/{HEAD}...{AFTER}"] = {"status": "diverged", "files": []}
-        self.assertEqual(run_main("push", PUSH, routes)["tier"], STANDARD)
-
-    def test_without_a_passing_pr_run_the_whole_pr_diff_is_classified(self):
-        routes = push_routes(OTHER_TREE, self.code, moved_files=[changed("CHANGELOG.md", 4)])
-        routes["actions/workflows/ci.yml/runs"] = {"workflow_runs": []}
-        self.assertEqual(run_main("push", PUSH, routes, {"CHANGELOG.md": ""})["tier"], STANDARD)
+    def test_ci_full_variable_forces_the_full_suite_on_a_docs_only_pull_request(self):
+        event, routes = pr([changed("README.md", 3)])
+        self.assertEqual(run_main("pull_request", event, routes, {"README.md": ""})["tier"], NONE)
+        result = run_main("pull_request", event, routes, {"README.md": ""}, {"INPUT_CI_FULL": "1"})
+        self.assertEqual((result["tier"], result["reason"]), (STANDARD, "repository variable CI_FULL is set"))
+        self.assertEqual(run_main("pull_request", event, routes, {"README.md": ""}, {"INPUT_CI_FULL": " "})["tier"], NONE)
 
 
-    def test_docs_merge_after_main_moved_still_runs_nothing(self):
-        routes = push_routes(OTHER_TREE, [changed("README.md", 3)])
-        self.assertEqual(run_main("push", PUSH, routes, {"README.md": ""})["tier"], NONE)
+class Unsure(unittest.TestCase):
+    """The planner names tests by reference and neighbour; where that proves nothing, it says so."""
 
-    def test_api_failure_runs_the_full_suite(self):
-        routes = push_routes(TESTED_TREE, self.code)
-        routes[f"commits/{AFTER}/pulls"] = OSError("boom")
-        self.assertEqual(run_main("push", PUSH, routes)["tier"], STANDARD)
+    def scan(self, files, repo, env=None):
+        event, routes = pr(files)
+        return run_main("pull_request", event, routes, repo, env)
 
-    def test_force_push_runs_the_full_suite(self):
-        self.assertEqual(run_main("push", {**PUSH, "forced": True}, push_routes(TESTED_TREE, self.code))["tier"], STANDARD)
+    def test_a_fixture_used_by_two_tests_runs_the_full_suite(self):
+        repo = {"tests/fixtures/users.ts": "", "tests/a.test.ts": 'import "./fixtures/users";\n',
+                "tests/b.test.ts": 'import "./fixtures/users";\n'}
+        result = self.scan([changed("tests/fixtures/users.ts", 2)], repo)
+        self.assertEqual(result["tier"], STANDARD)
+        self.assertIn("used by 2 test files", result["reason"])
+
+    def test_a_helper_used_by_one_test_stays_with_that_test(self):
+        repo = {"tests/helpers/db.ts": "", "tests/a.test.ts": 'import "./helpers/db";\n',
+                "tests/b.test.ts": "test(1)\n"}
+        result = self.scan([changed("tests/helpers/db.ts", 2)], repo)
+        self.assertEqual(result["tier"], CORE)
+        self.assertEqual(json.loads(result["direct-tests"]), ["tests/a.test.ts"])
+
+    def test_a_helper_no_test_names_runs_the_full_suite(self):
+        repo = {"src/testUtils.ts": "", "tests/a.test.ts": "test(1)\n"}
+        self.assertEqual(self.scan([changed("src/testUtils.ts", 2)], repo)["tier"], STANDARD)
+
+    def test_a_code_file_no_test_names_runs_the_full_suite(self):
+        repo = {"src/lib/price.ts": "", "tests/a.test.ts": "test(1)\n"}
+        result = self.scan([changed("src/lib/price.ts", 2)], repo)
+        self.assertEqual(result["tier"], STANDARD)
+        self.assertIn("no test names src/lib/price.ts", result["reason"])
+
+    def test_a_code_file_a_test_names_stays_core(self):
+        repo = {"src/lib/price.ts": "", "tests/a.test.ts": 'import "../src/lib/price";\n'}
+        self.assertEqual(self.scan([changed("src/lib/price.ts", 2)], repo)["tier"], CORE)
+
+    def test_a_test_file_that_cannot_be_read_runs_the_full_suite(self):
+        import classify
+        repo = {"src/lib/price.ts": "", "tests/a.test.ts": 'import "../src/lib/price";\n'}
+        old = classify.MAX_SCAN_BYTES
+        classify.MAX_SCAN_BYTES = 5
+        try:
+            result = self.scan([changed("src/lib/price.ts", 2)], repo)
+        finally:
+            classify.MAX_SCAN_BYTES = old
+        self.assertEqual(result["tier"], STANDARD)
 
 
-GRAND = "g" * 40
-DISPATCH = {"ref": "refs/heads/main", "repository": {"default_branch": "main"}}
-
-
-def dispatch_routes(compare_from, compare_files, proven):
-    """A dispatch on main at AFTER, whose first parents are BEFORE then GRAND; `proven`
-    names the ancestors with a passing dispatch run. No PR run proves AFTER."""
-    runs = {sha: {"workflow_runs": [{"id": 1, "event": "workflow_dispatch"}] if sha in proven else []}
-            for sha in (BEFORE, GRAND)}
-    return {
-        **{f"actions/workflows/ci.yml/runs?status=success&head_sha={sha}": body for sha, body in runs.items()},
-        "actions/workflows/ci.yml/runs": {"workflow_runs": []},
-        f"git/commits/{AFTER}": {"tree": {"sha": OTHER_TREE}, "parents": [{"sha": BEFORE}]},
-        f"git/commits/{BEFORE}": {"tree": {"sha": OTHER_TREE}, "parents": [{"sha": GRAND}]},
-        f"git/commits/{GRAND}": {"tree": {"sha": OTHER_TREE}, "parents": []},
-        "commits/": [],
-        f"compare/{compare_from}...{AFTER}": {"files": compare_files},
-    }
-
-
-class DispatchOnMain(unittest.TestCase):
-    # t6155: after dropping push:, every deploy-on-main dispatch for a moved-main merge
-    # ran the full suite, where the push run it replaced had run the merge's own tier.
-    env: ClassVar[dict[str, str]] = {"GITHUB_SHA": AFTER}
-
-    def test_docs_since_the_proven_parent_run_nothing(self):
-        routes = dispatch_routes(BEFORE, [changed("README.md", 3)], proven={BEFORE})
-        self.assertEqual(run_main("workflow_dispatch", DISPATCH, routes, {"README.md": ""}, self.env)["tier"], NONE)
-
-    def test_an_unproved_commit_in_between_joins_the_diff(self):
-        # BEFORE never passed CI, so its code must not escape: classify from GRAND.
-        routes = dispatch_routes(GRAND, [changed("README.md", 3), changed("app/a.ts", 100)], proven={GRAND})
-        routes[f"compare/{BEFORE}...{AFTER}"] = {"files": [changed("README.md", 3)]}
-        self.assertEqual(run_main("workflow_dispatch", DISPATCH, routes, {"README.md": ""}, self.env)["tier"], STANDARD)
-
-    def test_docs_merge_of_a_passed_pr_skips_what_the_proven_parent_holds(self):
-        # rsbook1 run 39701578222: a CHANGELOG-only merge commit ran the full suite for
-        # ci.yml, which main gained while the PR waited and its proven parent already held.
-        routes = {f"actions/workflows/ci.yml/runs?status=success&head_sha={BEFORE}":
-                  {"workflow_runs": [{"id": 1, "event": "workflow_dispatch"}]},
-                  **push_routes(OTHER_TREE, [changed("CHANGELOG.md", 4)],
-                                moved_files=[changed(".github/workflows/ci.yml", 3)])}
-        routes[f"git/commits/{AFTER}"] = {"tree": {"sha": OTHER_TREE}, "parents": [{"sha": BEFORE}]}
-        self.assertEqual(run_main("workflow_dispatch", DISPATCH, routes, {"CHANGELOG.md": ""}, self.env)["tier"], NONE)
-
-    def test_a_red_ancestor_is_not_proven_by_a_docs_difference(self):
-        # BEFORE's own run failed; its tree is a passed PR tree plus a doc the app reads.
-        # Counting it as proven let the next docs-only dispatch report none.
-        def tree(sha):
-            return {"truncated": False, "tree": [{"path": "docs/prompt.md", "type": "blob", "mode": "100644",
-                                                  "sha": sha}]}
-        routes = dispatch_routes(GRAND, [changed("README.md", 2), changed("docs/prompt.md", 3)], proven={GRAND})
-        routes = {"actions/workflows/ci.yml/runs?event=pull_request": {"workflow_runs": [{"id": 99}]},
-                  "actions/runs/99/jobs": {"jobs": [{"name": "ci tier", "id": 5}]},
-                  "check-runs/5/annotations": [{"title": "ci-tier", "message": f"tier=core tested-tree={TESTED_TREE}"}],
-                  f"commits/{BEFORE}/pulls": [{"number": 7, "merged_at": "x", "merge_commit_sha": BEFORE,
-                                               "head": {"sha": HEAD}}],
-                  f"git/trees/{TESTED_TREE}": tree("1"), f"git/trees/{OTHER_TREE}": tree("2"),
-                  f"compare/{BEFORE}...{AFTER}": {"files": [changed("README.md", 2)]}, **routes}
-        repo = {"README.md": "", "docs/prompt.md": "", "app/a.ts": 'readFileSync("docs/prompt.md")\n'}
-        self.assertNotEqual(run_main("workflow_dispatch", DISPATCH, routes, repo, self.env)["tier"], NONE)
-
-    def test_no_proven_ancestor_runs_the_full_suite(self):
-        routes = dispatch_routes(BEFORE, [changed("README.md", 3)], proven=set())
-        self.assertEqual(run_main("workflow_dispatch", DISPATCH, routes, {"README.md": ""}, self.env)["tier"], STANDARD)
+class Reason(unittest.TestCase):
+    def test_text_from_the_pull_request_cannot_carry_shell(self):
+        event, routes = pr([changed("a/$(curl evil)`id`;\"x\".postgres.test.ts", 1)])
+        result = run_main("pull_request", event, routes)
+        self.assertEqual(result["tier"], STANDARD)
+        self.assertRegex(result["reason"], r"^[A-Za-z0-9 .,:/#+=_-]+$")
+        self.assertNotIn("$", result["reason"])
 
 
 if __name__ == "__main__":

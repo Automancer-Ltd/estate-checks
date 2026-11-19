@@ -105,6 +105,19 @@ DATA_SUFFIXES = (".jsonl", ".ndjson", ".csv", ".tsv", ".log")
 # A manifest a program loads can list a doc, but only by its full path; a bare
 # file name or folder in one is a record, not a read.
 LIST_SUFFIXES = (".json", ".txt")
+# Files that exist to serve tests: fixtures, helpers, mocks, factories, setup. One that more than
+# one test file uses moves them all, and no per-test name search can say which (t20703).
+TEST_SUPPORT = re.compile(
+    r"(?:^|/)(?:fixtures?|__fixtures__|__mocks__|mocks?|testdata|test-data|test_data|testing|test-utils|testutils|"
+    r"test_utils|test-helpers|test_helpers|testhelpers|support|helpers?|factories|harness|e2e)/"
+    r"|(?:^|/)[\w.-]*(?:fixtures?|helpers?|setup|teardown|mocks?|factory|factories|harness|test[-_.]?utils?"
+    r"|testutils?)[\w.-]*\.[\w]+$", re.IGNORECASE)
+# Languages whose imports the name search follows; a changed file of one that no test names is
+# a file the planner cannot place, so the full suite runs.
+SELECTABLE_SUFFIXES = (".py", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".mts", ".cts", ".go", ".rs",
+                       ".rb", ".java", ".kt", ".swift", ".cs", ".php", ".vue", ".svelte")
+# What a reason may hold. Callers must still pass it through `env:`, never into shell text.
+SAFE_REASON = re.compile(r"[^A-Za-z0-9 .,:/#+=_-]")
 DEFAULT_TEST_GLOBS = ["**/*.test.*", "**/*.spec.*", "**/*_test.*", "**/test_*.py", "**/__tests__/**"]
 # A module with one of these names is imported by its folder: `engine/effects`.
 FOLDER_MODULES = {"index", "__init__", "mod", "main"}
@@ -221,6 +234,10 @@ def classify(files: list[ChangedFile], cfg: Config, labels: Iterable[str] = (),
     code = [f for f in files if not all(p in docs for p in _paths(f))]
     if not code:
         return NONE, f"all {len(files)} changed file(s) are documentation no code reads"
+    gone = next((f for f in code if f.status == "removed" or f.previous_path), None)
+    if gone:
+        verb = "deleted" if gone.status == "removed" else "renamed"
+        return STANDARD, f"{gone.path} is a {verb} code file; only the full suite finds what still uses it"
     lines = sum(f.lines for f in code)
     if len(code) <= cfg.small_max_files and lines <= cfg.small_max_lines:
         return CORE, f"small change: {len(code)} file(s), {lines} line(s)"
@@ -453,35 +470,6 @@ def tree_of(api: Api, sha: str) -> str:
     return body["tree"]["sha"]
 
 
-def merged_head(api: Api, after: str, parents: list[str]) -> tuple[str, str] | None:
-    """(head SHA, label) of what this push merged. A merge commit's second parent is the
-    PR head; GitHub links a commit to its PR only some seconds after the merge, so that
-    lookup, which a push run makes at once, is the fallback for squash and rebase merges
-    (automancer-ops PR #972, 21 Oct 2026: an exact tested tree ran the full suite)."""
-    if len(parents) == 2:
-        return parents[1], f"merged head {parents[1][:12]}"
-    pulls, _ = api.get(f"commits/{after}/pulls")
-    merged = [p for p in pulls if p.get("merged_at") and p.get("merge_commit_sha") == after]
-    return (merged[0]["head"]["sha"], f"PR #{merged[0]['number']}") if merged else None
-
-
-def tested_tree_of_run(api: Api, run_id: int, job_name: str) -> str | None:
-    """The tree a passing PR run recorded in its tier job's notice annotation.
-
-    All attempts: re-running failed jobs copies the tier job into the new attempt
-    without its annotations, so the record lives on the attempt that ran it. Any
-    job's notice counts, `job_name` first: six consumers' one-job workflows renamed
-    the job without passing `job-name`, so every push re-ran the full suite (21 Oct 2026)."""
-    jobs = api.paged(f"actions/runs/{run_id}/jobs?filter=all", key="jobs")
-    for job in sorted(jobs, key=lambda j: j.get("name") != job_name):
-        notes = api.paged(f"check-runs/{job['id']}/annotations")
-        for note in notes:
-            m = re.search(r"tested-tree=([0-9a-f]{40})", note.get("message", ""))
-            if note.get("title") == NOTICE_TITLE and m:
-                return m.group(1)
-    return None
-
-
 @dataclass
 class Decision:
     tier: Literal["none", "core", "standard"]
@@ -492,114 +480,26 @@ class Decision:
     direct_tests: list[str] = field(default_factory=list)  # core tier only
 
 
-def tree_drift(api: Api, tested: str, pushed: str) -> list[dict[str, Any]] | None:
-    """The files that differ between two trees, as compare-API file records without
-    line counts; None when GitHub truncates either listing."""
-    def entries(tree: str) -> dict[str, tuple[str, str]] | None:
-        body, _ = api.get(f"git/trees/{tree}?recursive=1")
-        return None if body.get("truncated") else {
-            e["path"]: (e["mode"], e["sha"]) for e in body["tree"] if e["type"] != "tree"}
-    old, new = entries(tested), entries(pushed)
-    if old is None or new is None:
-        return None
-    return [{"filename": p, "status": "removed" if p not in new else "added" if p not in old else "modified"}
-            for p in sorted(old.keys() | new.keys()) if old.get(p) != new.get(p)]
-
-
-def passed_pr(api: Api, after: str, workflow_path: str, job_name: str,
-              cfg: Config) -> tuple[Decision | None, str | None]:
-    """(skip, passed head): skip when the pushed tree is a tree a PR run passed, or
-    differs from one only by documentation; otherwise the head SHA of the merged PR
-    if a PR run of it passed. Trees, not commits, because a squash merge is no
-    descendant of the head: automancer-auto PR #389 changed ci.yml, main moved only
-    by plans/ docs, and its push re-ran the full suite (run 39658252274, t6084)."""
-    commit, _ = api.get(f"git/commits/{after}")
-    found = merged_head(api, after, [p["sha"] for p in commit.get("parents", [])])
-    if not found:
-        return None, None
-    head, label = found
-    pushed = commit["tree"]["sha"]
-    workflow = os.path.basename(workflow_path)
-    runs = api.paged(f"actions/workflows/{workflow}/runs?event=pull_request&status=success&head_sha={head}",
-                     key="workflow_runs", limit=20)
-    for run in runs:
-        tested = tested_tree_of_run(api, run["id"], job_name)
-        if tested == pushed:
-            return Decision(NONE, f"main's tree is exactly what {label} passed in run {run['id']}"), None
-        drift = tree_drift(api, tested, pushed) if tested else None
-        if drift and classify(_files(drift), cfg)[0] == NONE:
-            return Decision(NONE, f"only documentation differs from the tree {label} passed in run {run['id']}",
-                            files=_files(drift)), None
-    return None, head if runs else None
-
-
 def decide(event_name: str, event: dict[str, Any], cfg: Config, api: Api, github_sha: str,
-           workflow_path: str, job_name: str, default_branch_ref: str) -> Decision:
+           default_branch_ref: str, ci_full: str = "") -> Decision:
+    """Only a pull request can run less than the full suite. A manual dispatch, a push to the
+    default branch or a tag is what a release proof and a deploy rest on: a green run of the
+    exact tree must mean the full suite ran (t20703)."""
+    if ci_full.strip():
+        return Decision(STANDARD, "repository variable CI_FULL is set")
     if event_name == "pull_request":
         pr = event["pull_request"]
         labels = [label["name"] for label in pr.get("labels", [])]
         files = _files(api.paged(f"pulls/{pr['number']}/files"))
         return Decision(*classify(files, cfg, labels), tree_of(api, github_sha), files, labels)
-    if event_name == "push" and event.get("ref") == default_branch_ref:
-        before, after = event.get("before", ""), event.get("after", "")
-        if not before or set(before) == {"0"} or event.get("forced"):
-            return Decision(STANDARD, "new or force-pushed branch")
-        return since(api, before, after, workflow_path, job_name, cfg)
-    if event_name == "workflow_dispatch" and event.get("ref") == default_branch_ref:
-        before = proven_ancestor(api, github_sha, workflow_path, job_name, cfg)
-        if not before:
-            return Decision(STANDARD, "no proven commit in the last 20 on the default branch")
-        return since(api, before, github_sha, workflow_path, job_name, cfg, before_proven=True)
+    ref = str(event.get("ref") or "")
+    if event_name == "workflow_dispatch":
+        return Decision(STANDARD, "manual dispatch always runs the full suite")
+    if event_name == "push" and ref.startswith("refs/tags/"):
+        return Decision(STANDARD, "a tag always runs the full suite")
+    if event_name == "push" and ref == default_branch_ref:
+        return Decision(STANDARD, "a push to the default branch always runs the full suite")
     return Decision(STANDARD, f"event {event_name} always runs the full suite")
-
-
-def proven_ancestor(api: Api, after: str, workflow_path: str, job_name: str, cfg: Config,
-                    depth: int = 20) -> str | None:
-    """The newest first-parent ancestor of `after` that CI proved: a passing push or dispatch
-    run of this workflow, or a tree a PR run passed. deploy-on-main's dispatch-ci runs CI for a
-    merge no PR run proved, and a dispatch has no `before`; classifying from this commit, as the
-    push run it replaced did, keeps a moved-main merge off the full suite, and any unproved
-    commit in between joins the diff instead of escaping it (gdp-knowledge-graph, t6155)."""
-    workflow = os.path.basename(workflow_path)
-    sha = after
-    for _ in range(depth):
-        parents = api.get(f"git/commits/{sha}")[0].get("parents", [])
-        if not parents:
-            return None
-        sha = parents[0]["sha"]
-        runs = api.paged(f"actions/workflows/{workflow}/runs?status=success&head_sha={sha}",
-                         key="workflow_runs", limit=20)
-        if any(r.get("event") in ("push", "workflow_dispatch") for r in runs):
-            return sha
-        # Only an exact tested tree: a docs-only difference has had no check for code
-        # reading those docs, and this commit's own run may have failed on one.
-        skip = passed_pr(api, sha, workflow_path, job_name, cfg)[0]
-        if skip and not skip.files:
-            return sha
-    return None
-
-
-def since(api: Api, before: str, after: str, workflow_path: str, job_name: str, cfg: Config,
-          before_proven: bool = False) -> Decision:
-    """The tier for the default branch moving from `before` to `after`."""
-    skip, passed_head = passed_pr(api, after, workflow_path, job_name, cfg)
-    if skip:
-        return skip
-    body, _ = api.get(f"compare/{before}...{after}")
-    raw = body.get("files", [])
-    if passed_head and not (before_proven and classify(_files(raw), cfg)[0] == NONE):
-        # Code moved main while the PR waited: it joins the PR's diff so a merge
-        # skew still runs. Only a merge commit keeps the head as an ancestor;
-        # squash and rebase merges classify the PR's diff alone. When CI proved
-        # `before` and only docs differ from it, there is no skew to run
-        # (rsbook1 run 39701578222). A push's `before` may be unproved, so it keeps the join.
-        moved, _ = api.get(f"compare/{passed_head}...{after}")
-        extra: list[dict[str, Any]] = moved.get("files", []) if moved.get("status") == "ahead" else []
-        raw = raw + [f for f in extra if f["filename"] not in {g["filename"] for g in raw}]
-    if len(raw) >= 300:
-        return Decision(STANDARD, "300+ files changed (compare API limit)")
-    files = _files(raw)
-    return Decision(*classify(files, cfg), files=files)
 
 
 def _plan(environ: Mapping[str, str], cfg: Config, make_api: Callable[[str, str, str], Api]) -> Decision:
@@ -608,9 +508,47 @@ def _plan(environ: Mapping[str, str], cfg: Config, make_api: Callable[[str, str,
     api = make_api(environ.get("GITHUB_API_URL", "https://api.github.com"),
                    environ["GITHUB_REPOSITORY"], environ["INPUT_TOKEN"])
     default_ref = "refs/heads/" + (event.get("repository", {}).get("default_branch") or "main")
-    return decide(environ.get("GITHUB_EVENT_NAME", ""), event, cfg, api,
-                  environ.get("GITHUB_SHA", ""), environ.get("GITHUB_WORKFLOW_REF", "").split("@")[0],
-                  environ.get("INPUT_JOB_NAME") or "ci tier", default_ref)
+    return decide(environ.get("GITHUB_EVENT_NAME", ""), event, cfg, api, environ.get("GITHUB_SHA", ""),
+                  default_ref, environ.get("INPUT_CI_FULL") or environ.get("CI_FULL") or "")
+
+
+def unsure_paths(paths: list[str], tracked: list[str],
+                 test_globs: list[re.Pattern[str]], cfg: Config, root: str) -> list[str]:
+    """Why the planner cannot name the tests with confidence, one phrase per cause.
+
+    The name search sees direct references and neighbours, not the runner's own dependency
+    graph, so it answers only when it finds something: a shared fixture or helper (more than
+    one test uses it), a code file no test names, or a test file it could not read."""
+    why: list[str] = []
+    def is_test(p: str) -> bool:
+        return any(g.match(p) for g in test_globs)
+
+    for p in sorted(set(paths)):
+        if is_test(p):
+            continue
+        named = direct_tests([p], tracked, cfg.test_globs, root)
+        if TEST_SUPPORT.search(p):
+            if len(named) != 1:
+                why.append(f"{p} is a test fixture, helper or setup file used by {len(named) or 'unknown'} test files")
+        elif p.startswith("convex/") and not named:
+            why.append(f"no test names Convex file {p}")
+        elif p.endswith(SELECTABLE_SUFFIXES) and not named:
+            why.append(f"no test names {p}, so the planner cannot say which tests it affects")
+    unread = [t for t in tracked if is_test(t) and _unreadable(os.path.join(root, t))]
+    if unread:
+        why.append(f"{len(unread)} test file(s) could not be read, such as {unread[0]}")
+    return why
+
+
+def _unreadable(path: str) -> bool:
+    try:
+        if os.path.getsize(path) > MAX_SCAN_BYTES:
+            return True
+        with open(path, "rb") as fh:
+            fh.read(1)
+    except OSError:
+        return True
+    return False
 
 
 def _scan(state: dict[str, Any], cfg: Config, root: str) -> Decision:
@@ -630,13 +568,12 @@ def _scan(state: dict[str, Any], cfg: Config, root: str) -> Decision:
             f"{path} is test setup that {config} runs before every test" for path, config in sorted(setup.items()))
             + "; running the full suite")
     if tier == CORE:
-        # Deleted and old renamed paths too: a test still importing one fails on main.
         paths = [p for f in files for p in _paths(f)]
         tests = direct_tests(paths, tracked, cfg.test_globs, root)
-        unmatched = [p for p in paths if p.startswith("convex/") and not direct_tests([p], tracked, cfg.test_globs, root)]
-        if unmatched:
-            tier, reason = STANDARD, (f"{reason}, but no test names Convex file(s): {', '.join(unmatched)}; "
-                                      "running the full suite")
+        globs = [glob_to_regex(g) for g in cfg.test_globs]
+        unsure = unsure_paths(paths, tracked, globs, cfg, root)
+        if unsure:
+            tier, reason = STANDARD, (f"{reason}, but " + "; ".join(unsure) + "; running the full suite")
             tests = []
         elif len(tests) > cfg.core_max_tests:
             tier, reason = STANDARD, (f"{reason}, but {len(tests)} test files name the changed code "
@@ -645,6 +582,15 @@ def _scan(state: dict[str, Any], cfg: Config, root: str) -> Decision:
         else:
             reason += f"; {len(tests)} test file(s) name the changed code"
     return Decision(tier, reason, state["tested_tree"], files, state["labels"], tests)
+
+
+def safe_reason(text: str) -> str:
+    """One line of plain characters. A reason carries file names, labels and error text that
+    came from a pull request, and a caller may put the output in a shell: keep letters, digits
+    and `. , : / # + = _ -` and a space, drop quotes and brackets, turn the rest into `_`."""
+    text = text.replace(";", ",")
+    text = re.sub(r"[()\[\]{}'\"`]", "", text)
+    return " ".join(SAFE_REASON.sub("_", text).split())[:600]
 
 
 def main(argv: list[str], environ: Mapping[str, str] = os.environ,
@@ -676,10 +622,10 @@ def main(argv: list[str], environ: Mapping[str, str] = os.environ,
                 return 0
     except Exception as exc:  # noqa: BLE001 — any surprise must fail toward running the suite
         d = Decision(STANDARD, f"could not classify ({type(exc).__name__}: {exc}); running the full suite")
-        print(f"::warning title={NOTICE_TITLE}::{d.reason}")
+        print(f"::warning title={NOTICE_TITLE}::{safe_reason(d.reason)}")
 
     # One line: a file name may hold a line break, and each output line sets a value.
-    tier, reason = d.tier, " ".join(d.reason.splitlines())
+    tier, reason = d.tier, safe_reason(d.reason)
     print(f"Tier: {tier} — {reason}")
     # Every run records its tier: ci-proof.sh accepts a dispatch whose tier was none (t6378).
     print(f"::notice title={NOTICE_TITLE}::tier={tier}" + (f" tested-tree={d.tested_tree}" if d.tested_tree else ""))
