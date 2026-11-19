@@ -45,6 +45,10 @@ inputs:
     description: "The display name of the job calling this action. On a push to the default branch the action reads this job's tested-tree notice first, then any other job's."
     required: false
     default: 'ci tier'
+  ci-full:
+    description: 'Optional. Any non-empty value runs the full suite. Pass the repository variable CI_FULL from the workflow (the vars context is not available inside an action); a workflow-level env named CI_FULL does the same.'
+    required: false
+    default: ''
   token:
     description: 'Token with contents, pull-requests, actions and checks read access.'
     required: false
@@ -83,7 +87,7 @@ runs:
         INPUT_CORE_MAX_TESTS: ${{ inputs.core-max-tests }}
         INPUT_TEST_GLOBS: ${{ inputs.test-globs }}
         INPUT_JOB_NAME: ${{ inputs.job-name }}
-        INPUT_CI_FULL: ${{ vars.CI_FULL }}
+        INPUT_CI_FULL: ${{ inputs.ci-full }}
         INPUT_TOKEN: ${{ inputs.token }}
       run: python3 "$GITHUB_ACTION_PATH/classify.py"
 
