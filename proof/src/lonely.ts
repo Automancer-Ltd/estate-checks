@@ -1,1 +1,1 @@
-export const lonely = 1;
+export const lonely = 2;
