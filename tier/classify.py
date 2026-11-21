@@ -152,14 +152,16 @@ class Config:
         )
 
 
-def glob_to_regex(pattern: str) -> re.Pattern[str]:
-    """Match a repo-relative path. `**` crosses directories, `*` and `?` do not.
+def _glob_body(pattern: str, start: int, depth: int) -> tuple[str, int]:
+    """Translate glob characters into a regex fragment.
 
-    A pattern is anchored at the repo root: `*.md` matches only root markdown,
-    `docs/**/*.md` matches markdown anywhere under docs/.
+    Stops at the end of the pattern or, inside a brace alternation
+    (depth > 0), at a `,` or the closing `}`. Returns the fragment and the
+    index to resume at.
     """
     out: list[str] = []
-    i = 0
+    alts: list[str] = []
+    i = start
     while i < len(pattern):
         if pattern.startswith("**/", i):
             out.append("(?:.*/)?")
@@ -173,14 +175,62 @@ def glob_to_regex(pattern: str) -> re.Pattern[str]:
         elif pattern[i] == "?":
             out.append("[^/]")
             i += 1
+        elif pattern[i] == "{":
+            alt, i = _glob_body(pattern, i + 1, depth + 1)
+            out.append(alt)
+        elif depth and pattern[i] == ",":
+            alts.append("".join(out))
+            out = []
+            i += 1
+        elif pattern[i] == "}":
+            if depth:
+                alts.append("".join(out))
+                return "(?:" + "|".join(alts) + ")", i + 1
+            out.append(re.escape("}"))
+            i += 1
         else:
             out.append(re.escape(pattern[i]))
             i += 1
-    return re.compile("^" + "".join(out) + "$")
+    if depth:
+        # Unterminated brace: the whole `{...` run stays literal (t23443).
+        return re.escape(pattern[start - 1:]), len(pattern)
+    return "".join(out), i
+
+
+def glob_to_regex(pattern: str) -> re.Pattern[str]:
+    """Match a repo-relative path. `**` crosses directories, `*` and `?` do not.
+
+    A pattern is anchored at the repo root: `*.md` matches only root markdown,
+    `docs/**/*.md` matches markdown anywhere under docs/. `{a,b}` expands to
+    an alternation, so `tests/**/*.test.{ts,tsx}` matches both suffixes;
+    an unterminated or stray brace stays literal.
+    """
+    body, _ = _glob_body(pattern, 0, 0)
+    return re.compile("^" + body + "$")
 
 
 def parse_list(raw: str) -> list[str]:
-    return [p.strip() for p in re.split(r"[,\n]", raw or "") if p.strip() and not p.strip().startswith("#")]
+    """Split an input on commas and newlines, but not inside `{a,b}` braces:
+    `tests/**/*.test.{ts,tsx}` is one pattern (t23443)."""
+    out: list[str] = []
+    part: list[str] = []
+    depth = 0
+    for ch in raw or "":
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth = max(0, depth - 1)
+        if depth == 0 and ch in ",\n":
+            text = "".join(part).strip()
+            if text and not text.startswith("#"):
+                out.append(text)
+            part = []
+        else:
+            part.append(ch)
+    text = "".join(part).strip()
+    if text and not text.startswith("#"):
+        out.append(text)
+    return out
 
 
 def _matches(path: str, patterns: Iterable[re.Pattern[str]]) -> bool:

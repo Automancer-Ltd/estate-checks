@@ -76,7 +76,11 @@ Most repositories pass no inputs. The built-in lists live in `classify.py`:
   files are skipped, and a `.json` or `.txt` file counts only when it names the
   doc's full path, as a manifest a program loads does (t6067).
 
-**The quick job's tests are named, not traced.** For a core change the action
+**The quick job's tests are named, not traced.** Globs — the built-in test
+patterns and the `test-globs`, `docs*` and `full-paths` inputs — expand brace
+alternation: `tests/**/*.test.{ts,tsx}` matches both suffixes. Before 21 Nov
+2026 a declared brace pattern matched nothing silently, so every small change
+in that repository ran the full suite (t23443). For a core change the action
 lists the test files that refer to a changed file by folder and name
 (`lib/costEnvelope`, `lib.costEnvelope`, or `engine/effects` for an index
 module), including a deleted file or a renamed file's old path, plus any
