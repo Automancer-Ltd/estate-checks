@@ -26,6 +26,9 @@ the changed file through the manifest's output expression.
 - `push-main`, `tag`, `dispatch` and `api-failure`: a push to the default branch, a tag,
   a dispatch and an API failure each return `standard`; nothing but a pull request
   can run less than the full suite (t20703).
+- `caller-full-clone`: a caller whose checkout already holds the commit at full
+  history keeps that tree: no checkout step runs, the scan reads their tree, and
+  a later `git rev-parse HEAD~1` still resolves (al-ui PR #245, t23420).
 
 Real data: before releasing, replay a consumer's recent failed pull-request runs
 through `classify` and `_scan` (`pulls/<n>/files` and a `git archive` of the PR head)
