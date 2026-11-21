@@ -4,7 +4,10 @@ A consumer runs the JSON paths in the tier action's `direct-tests` output.
 The `small` case selects `tests/cost.test.ts` by its direct import. The `convex`
 case selects `tests/access.test.ts` by `api.feedback.submit`. The `unmatched`
 case returns `standard` and an empty direct-test list for an uncovered Convex
-module. Exact expected lists are asserted at the manifest output.
+module. The `brace-test-globs` case (t23443) declares
+`tests/**/*.test.{ts,tsx}` and must still select the test: brace patterns used
+to be split at the comma on input and matched nothing. Exact expected lists are
+asserted at the manifest output.
 
 Gotchas: these are fixture source files, not executed consumer test suites.
 The real consumer proof checks actual runner wiring. Sparse checkout must retain

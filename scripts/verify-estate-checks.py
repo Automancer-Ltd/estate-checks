@@ -141,6 +141,9 @@ def verify(evidence: Path) -> None:
                               list[dict[str, str]], str, list[str]]] = [
                 ("docs", {"docs/guide.md": "Guide\n"}, "docs/guide.md", 1, {}, [], "none", []),
                 ("small", common, "src/cost.ts", 1, {}, [], "core", ["tests/cost.test.ts"]),
+                # t23443: a declared brace pattern must match, not silently match nothing.
+                ("brace-test-globs", common, "src/cost.ts", 1,
+                 {"test-globs": "tests/**/*.test.{ts,tsx}"}, [], "core", ["tests/cost.test.ts"]),
                 ("unmatched-source", {"src/new.ts": "export const value = 1;\n"},
                  "src/new.ts", 1, {}, [], "standard", []),
                 ("convex", {"convex/feedback.ts": "export const submit = 1;\n",

@@ -38,7 +38,7 @@ inputs:
     required: false
     default: '30'
   test-globs:
-    description: 'Optional. Globs that identify test files, replacing the default (*.test.*, *.spec.*, *_test.*, test_*.py, __tests__/).'
+    description: 'Optional. Globs that identify test files, replacing the default (*.test.*, *.spec.*, *_test.*, test_*.py, __tests__/). Braces expand: tests/**/*.test.{ts,tsx} matches both suffixes.'
     required: false
     default: ''
   job-name:

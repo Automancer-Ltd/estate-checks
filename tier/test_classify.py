@@ -9,7 +9,17 @@ import subprocess
 import tempfile
 import unittest
 
-from classify import CORE, NONE, STANDARD, ChangedFile, Config, classify, main
+from classify import (
+    CORE,
+    NONE,
+    STANDARD,
+    ChangedFile,
+    Config,
+    classify,
+    glob_to_regex,
+    main,
+    parse_list,
+)
 
 DEFAULTS = Config.from_inputs()
 
@@ -78,6 +88,35 @@ class Classify(unittest.TestCase):
 
     def test_full_label_overrides_docs(self):
         self.assertEqual(classify([f("README.md")], DEFAULTS, ["ci:full"])[0], STANDARD)
+
+
+class GlobBraces(unittest.TestCase):
+    """t23443: declared `{a,b}` patterns must match, not silently match nothing."""
+
+    def test_brace_alternation_matches_each_alternative(self):
+        g = glob_to_regex("tests/**/*.test.{ts,tsx}")
+        self.assertTrue(g.match("tests/a.test.ts"))
+        self.assertTrue(g.match("tests/nested/b.test.tsx"))
+        self.assertFalse(g.match("tests/a.test.js"))
+        self.assertFalse(g.match("src/a.test.ts"))
+
+    def test_braces_compose_with_other_globs(self):
+        g = glob_to_regex("docs/{guides,plans}/*.md")
+        self.assertTrue(g.match("docs/guides/a.md"))
+        self.assertTrue(g.match("docs/plans/b.md"))
+        self.assertFalse(g.match("docs/other/c.md"))
+        self.assertTrue(glob_to_regex("**/{a,b}/**/*.ts").match("x/a/y/t.ts"))
+
+    def test_unbalanced_braces_stay_literal(self):
+        self.assertTrue(glob_to_regex("a{b").match("a{b"))
+        self.assertFalse(glob_to_regex("a{b").match("ab"))
+        self.assertTrue(glob_to_regex("a}b").match("a}b"))
+        self.assertTrue(glob_to_regex("a,b").match("a,b"))
+
+    def test_input_parsing_keeps_a_braced_pattern_whole(self):
+        self.assertEqual(parse_list("tests/**/*.test.{ts,tsx}"), ["tests/**/*.test.{ts,tsx}"])
+        self.assertEqual(parse_list("a, {b,c} , d"), ["a", "{b,c}", "d"])
+        self.assertEqual(parse_list("# comment\n{a,b}"), ["{a,b}"])
 
 
 class FakeApi:
@@ -485,6 +524,15 @@ class Unsure(unittest.TestCase):
     def test_a_code_file_a_test_names_stays_core(self):
         repo = {"src/lib/price.ts": "", "tests/a.test.ts": 'import "../src/lib/price";\n'}
         self.assertEqual(self.scan([changed("src/lib/price.ts", 2)], repo)["tier"], CORE)
+
+    def test_a_declared_brace_test_glob_names_its_tests(self):
+        # t23443: mileage-claims declares tests/**/*.test.{ts,tsx}; the classifier
+        # used to match nothing with it, so every small change ran the full suite.
+        repo = {"src/lib/price.ts": "", "tests/a.test.ts": 'import "../src/lib/price";\n'}
+        result = self.scan([changed("src/lib/price.ts", 2)], repo,
+                           {"INPUT_TEST_GLOBS": "tests/**/*.test.{ts,tsx}"})
+        self.assertEqual(result["tier"], CORE)
+        self.assertEqual(json.loads(result["direct-tests"]), ["tests/a.test.ts"])
 
     def test_a_test_file_that_cannot_be_read_runs_the_full_suite(self):
         import classify
