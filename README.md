@@ -334,3 +334,15 @@ until a web surface exists, and that visibility is the record:
   that the product is not in the registry
 
 Do not register a fake web product to clear those warnings.
+
+## disk-ready: wait for the real disk on boat (t23520)
+
+A job on a boat.dev `ci-base` VM can start while boat is still swapping in the snapshot disk; a step then loses its working directory (`uv_cwd`, "Unable to read current working directory"). Put this as the first step of every job that can run on boat:
+
+```yaml
+steps:
+  - uses: Automancer-Ltd/estate-checks/disk-ready@v1
+  - uses: actions/checkout@v7
+```
+
+It runs the same test as `boat-job` (t10986): `/var/lib/ascii-lazy` absent, or `hydration-done` present, no `active` marker, and the workspace filesystem not fuse. It waits up to `timeout` seconds (default 180) and then fails the job. Where `/var/lib/ascii-lazy` does not exist (GitHub-hosted, Blacksmith) it returns at once. Roll back by removing the step.

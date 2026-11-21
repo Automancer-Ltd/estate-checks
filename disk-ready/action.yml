@@ -1,0 +1,24 @@
+name: 'Wait for the real disk'
+description: 'On a boat.dev ci-base VM, wait until the snapshot disk has finished hydrating before the first step. A no-op on GitHub-hosted and Blacksmith runners.'
+inputs:
+  timeout:
+    description: 'Seconds to wait before failing the job'
+    required: false
+    default: '180'
+  path:
+    description: 'Directory whose filesystem must not be fuse (defaults to the workspace)'
+    required: false
+    default: ''
+runs:
+  using: 'composite'
+  steps:
+    - name: Wait for the real disk
+      shell: bash
+      env:
+        DISK_READY_TIMEOUT: ${{ inputs.timeout }}
+        DISK_READY_PATH: ${{ inputs.path }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        # shellcheck disable=SC2154
+        [ -n "$DISK_READY_PATH" ] || unset DISK_READY_PATH
+        timeout "$((DISK_READY_TIMEOUT + 30))" bash "$ACTION_PATH/wait.sh"
