@@ -72,11 +72,18 @@ def action(manifest: Path, work: Path, evidence: Path, env: dict[str, str],
     def expand(text: str) -> str:
         return re.sub(r"\$\{\{\s*(.*?)\s*\}\}", lambda m: resolve(m[1]), text)
 
+    def holds(condition: str) -> bool:
+        """Evaluate one `left == right` or `left != right` comparison; unknown outputs are empty."""
+        for operator in (" == ", " != "):
+            if operator in condition:
+                left, right = condition.split(operator, 1)
+                equal = resolve(left) == resolve(right)
+                return equal if operator == " == " else not equal
+        raise ValueError(f"Unimplemented condition: {condition}")
+
     for index, step in enumerate(spec["runs"]["steps"]):
-        if "if" in step:
-            left, right = step["if"].split(" == ")
-            if resolve(left) != resolve(right):
-                continue
+        if "if" in step and not all(holds(part.strip()) for part in step["if"].split(" && ")):
+            continue
         if "uses" in step:
             if not step["uses"].startswith("actions/checkout@"):
                 raise ValueError(f"Unimplemented runner step: {step['uses']}")
@@ -187,6 +194,34 @@ def verify(evidence: Path) -> None:
                 assert json.loads(outputs["direct-tests"]) == tests, (name, outputs)
                 assert json.loads(outputs["touched-files"]) == [changed], (name, outputs)
                 results.append({"journey": name, "outputs": outputs})
+
+            # A caller that checked out with fetch-depth: 0 already holds the commit:
+            # the tier must keep that tree, not re-check out shallow in their workspace
+            # (al-ui PR #245, t23420). No checkout step runs, and a later history step
+            # (git rev-parse HEAD~1, the al-ui failure) still resolves.
+            dest = evidence / "caller-full-clone"
+            dest.mkdir()
+            work = scratch / "caller-full-clone"
+            fixture(work, common)
+            head = command(["git", "rev-parse", "HEAD"], work)
+            event = dest / "event.json"
+            event.write_text(json.dumps({"pull_request": {"number": 3, "labels": []},
+                                         "repository": {"default_branch": "main"}}))
+            ApiServer.routes = {"pulls/3/files": [{"filename": "src/cost.ts", "additions": 1,
+                                                   "deletions": 0, "status": "modified"}],
+                                f"git/commits/{head}": {"tree": {"sha": TREE}}}
+            env = {**os.environ, "GITHUB_EVENT_NAME": "pull_request", "GITHUB_SHA": head,
+                   "GITHUB_EVENT_PATH": str(event), "GITHUB_REPOSITORY": REPO,
+                   "GITHUB_API_URL": f"http://127.0.0.1:{server.server_port}",
+                   "GITHUB_WORKSPACE": str(work), "RUNNER_TEMP": str(dest),
+                   "GITHUB_STEP_SUMMARY": str(dest / "summary.md")}
+            code, outputs = action(ROOT / "tier/action.yml", work, dest, env)
+            assert code == 0 and outputs["tier"] == "core", (code, outputs)
+            assert json.loads(outputs["direct-tests"]) == ["tests/cost.test.ts"], outputs
+            assert not list(dest.glob("*-checkout.log")), "the tier re-checked out a caller that already held the commit"
+            assert command(["git", "rev-parse", "--is-shallow-repository"], work) == "false"
+            command(["git", "rev-parse", "HEAD~1"], work)
+            results.append({"journey": "caller-full-clone", "outputs": outputs})
 
             # Release events always run everything, and need no API read (t20703); an API
             # failure on a pull request falls back to the same answer.

@@ -91,10 +91,26 @@ runs:
         INPUT_TOKEN: ${{ inputs.token }}
       run: python3 "$GITHUB_ACTION_PATH/classify.py"
 
+    # A caller that needs git history checks out with fetch-depth: 0, and the scan
+    # only reads the working tree, so when their checkout already holds the commit
+    # with full history, keep it: re-checking out at the default depth makes their
+    # clone shallow and cuts later history steps short (al-ui PR #245, t23420).
+    - name: Reuse the caller's checkout when it already holds the commit
+      id: have-commit
+      if: steps.plan.outputs.needs-scan == 'true'
+      shell: bash
+      run: |
+        if [ "$(git rev-parse --is-shallow-repository 2>/dev/null || echo true)" = false ] \
+           && git cat-file -e "${GITHUB_SHA}^{commit}" 2>/dev/null \
+           && [ "$(git rev-parse HEAD)" = "$GITHUB_SHA" ]; then
+          echo "reuse=true" >> "$GITHUB_OUTPUT"
+          echo "The caller's checkout already holds $GITHUB_SHA with full history; keeping it."
+        fi
+
     # A small change, or docs: does code read the changed docs, and which tests
     # name the changed code? A failed checkout makes the scan fail: standard.
     - name: Check out the code to finish classifying
-      if: steps.plan.outputs.needs-scan == 'true'
+      if: steps.plan.outputs.needs-scan == 'true' && steps.have-commit.outputs.reuse != 'true'
       continue-on-error: true
       uses: actions/checkout@v7
       with:

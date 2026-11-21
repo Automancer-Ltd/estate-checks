@@ -145,6 +145,14 @@ an asset directory with patterns, set `sparse-checkout-cone-mode: 'false'`.
 These inputs affect only the tier action's conditional checkout. They do not
 configure checkout in other jobs or change history depth or tier selection.
 
+**The tier never shallows the caller's checkout.** Repositories that need git
+history (gitleaks scans, merge-base checks) check out with `fetch-depth: 0`, as
+`estate-checks@v1` itself requires. When the workspace already holds the commit
+at full history (`HEAD` is `GITHUB_SHA` and the clone is not shallow), the tier
+skips its own checkout and scans that tree, so later steps keep their history
+(al-ui PR #245 hit `unknown revision` on `git rev-parse HEAD~1` before this).
+Only a workspace that misses the commit gets the tier's own shallow checkout.
+
 ## Path-filtering steps on what a change touched
 
 `touched-files` is the output to path-filter steps on: a JSON array of every
