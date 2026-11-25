@@ -42,7 +42,7 @@ inputs:
     required: false
     default: ''
   job-name:
-    description: "Legacy input; proof reuse checks the successful ci job."
+    description: "Legacy input; proof reuse checks successful jobs for the tier notice."
     required: false
     default: 'ci tier'
   ci-full:

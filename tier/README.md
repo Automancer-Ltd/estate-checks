@@ -21,7 +21,7 @@ workflow passes it: `ci-full: ${{ vars.CI_FULL }}` as an input of the tier step 
 
 **Release proofs.** Dispatches and tags always run `standard` (t20703). A push to the
 default branch may return `none` when a successful same-repository pull request run has
-the same head tree and its successful `ci` gate records `tier=standard` for that tree.
+the same head tree and its successful CI job records `tier=standard` for that tree.
 The notice names the reused PR run. Missing proof or an API error runs `standard`.
 `CI_FULL` also forces `standard`.
 
@@ -184,14 +184,14 @@ filter must run its step on `[]`:
 - **Pull request:** the PR's file list from the REST API. A rename counts as
   both its old and new path, so moving code into `docs/` is not docs, and a
   renamed or deleted code file is `standard`.
-- **Push to the default branch:** reuse a same-tree successful standard PR `ci` gate,
+- **Push to the default branch:** reuse a same-tree successful standard PR CI job,
   or run `standard` if no proof is found.
 - **Dispatch or tag:** `standard`, without an API read.
 - **Anything else** (`schedule`, another branch, an API error, a failed checkout): `standard`. The action never fails the job.
 
 ## Wiring a workflow
 
-Use one job when the complete verdict is under about five minutes. A later push checks the successful PR `ci` job's tested-tree notice. Scanners run
+Use one job when the complete verdict is under about five minutes. A later push checks the successful PR job's tested-tree notice. Scanners run
 even on documentation-only changes. The job has no dependency or job-level
 condition, so it always reports and can be the required context.
 

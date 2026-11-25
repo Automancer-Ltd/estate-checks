@@ -557,7 +557,7 @@ def decide(event_name: str, event: dict[str, Any], cfg: Config, api: Api, github
             if tree_of(api, run["head_sha"]) != tree:
                 continue
             for job in api.paged(f"actions/runs/{run['id']}/jobs", "jobs"):
-                if job.get("name") != "ci" or job.get("conclusion") != "success":
+                if job.get("conclusion") != "success":
                     continue
                 annotations = api.paged(f"check-runs/{job['id']}/annotations")
                 if any(a.get("title") == NOTICE_TITLE and
