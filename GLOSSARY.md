@@ -25,8 +25,7 @@ They do not include every test reachable through transitive imports.
 A Convex generated API name is also a reference key.
 
 **Tested tree**: The exact Git tree recorded by a successful consumer PR run.
-A later default-branch push reuses that proof for the same tree, or for one that
-differs from the passed PR head only by documentation.
+A later default-branch push can reuse a standard `ci` pass for the identical PR head and tested tree.
 
 **Full paths**: Consumer patterns that add to the files requiring `standard`,
 even for a small change.
