@@ -268,5 +268,234 @@ jobs:
         self.assertEqual(run(text), [])
 
 
+PR_BASE = """\
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+"""
+
+JOB = """  {key}:
+    runs-on: ${{{{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}}}
+    timeout-minutes: 20
+    steps:
+      - uses: Automancer-Ltd/estate-checks/disk-ready@v1
+      - uses: actions/checkout@v7
+      - run: echo ok
+"""
+
+
+def pr_workflow(*keys):
+    return PR_BASE + "".join(JOB.format(key=k) for k in keys)
+
+
+class PrJobFanout(unittest.TestCase):
+    def test_three_or_fewer_pr_jobs_pass(self):
+        for count in (1, 2, 3):
+            keys = [f"job{i}" for i in range(count)]
+            self.assertNotIn("pr-job-fanout", rules(run(pr_workflow(*keys))))
+
+    def test_four_pr_jobs_are_reported(self):
+        findings = run(pr_workflow("a", "b", "c", "d"))
+        self.assertIn("pr-job-fanout", rules(findings))
+        finding = next(f for f in findings if f.rule == "pr-job-fanout")
+        self.assertIn("4 PR-eligible jobs", finding.message)
+
+    def test_workflow_without_pull_request_trigger_is_not_judged(self):
+        text = pr_workflow("a", "b", "c", "d").replace("  pull_request:\n", "")
+        self.assertNotIn("pr-job-fanout", rules(run(text)))
+
+    def test_reusable_workflow_callers_do_not_count(self):
+        caller = (
+            "  reuse1:\n    uses: ./.github/workflows/r.yml\n"
+            "  reuse2:\n    uses: ./.github/workflows/r.yml\n"
+        )
+        text = pr_workflow("a", "b") + caller
+        self.assertNotIn("pr-job-fanout", rules(run(text)))
+
+    def test_push_only_jobs_do_not_count(self):
+        push_only = (
+            "  deploy:\n    if: github.event_name == 'push'\n"
+            "    runs-on: ${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}\n"
+            "    timeout-minutes: 20\n    steps:\n      - run: echo ok\n"
+        )
+        text = pr_workflow("a", "b", "c") + push_only
+        self.assertNotIn("pr-job-fanout", rules(run(text)))
+
+    def test_inline_justification_silences_the_warning(self):
+        lines = pr_workflow("a", "b", "c", "d").splitlines(keepends=True)
+        # justification comment sits on a line near the fourth job key
+        for i, raw in enumerate(lines):
+            if raw.startswith("  d:"):
+                lines[i] = "  # estate-checks-allow: pr-job-fanout matrix split keeps cold runs under 5 min\n" + raw
+        text = "".join(lines)
+        self.assertNotIn("pr-job-fanout", rules(run(text)))
+
+
+class OversizedPaidRunner(unittest.TestCase):
+    def test_big_blacksmith_runner_on_pr_is_reported(self):
+        for size in (8, 16, 32):
+            text = pr_workflow("a").replace(
+                "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+                f"blacksmith-{size}vcpu-ubuntu-2404",
+            )
+            findings = run(text)
+            self.assertIn("oversized-paid-runner", rules(findings), size)
+
+    def test_small_blacksmith_runner_passes(self):
+        for size in (2, 4):
+            text = pr_workflow("a").replace(
+                "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+                f"blacksmith-{size}vcpu-ubuntu-2404",
+            )
+            self.assertNotIn("oversized-paid-runner", rules(run(text)), size)
+
+    def test_push_only_workflow_is_not_judged(self):
+        text = pr_workflow("a").replace("  pull_request:\n", "").replace(
+            "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+            "blacksmith-16vcpu-ubuntu-2404",
+        )
+        self.assertNotIn("oversized-paid-runner", rules(run(text)))
+
+    def test_push_gated_job_is_not_judged(self):
+        text = pr_workflow("a").replace(
+            "  a:\n",
+            "  a:\n    if: github.event_name == 'push'\n",
+        ).replace(
+            "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+            "blacksmith-32vcpu-ubuntu-2404",
+        )
+        self.assertNotIn("oversized-paid-runner", rules(run(text)))
+
+    def test_expression_scaling_to_large_vcpu_is_reported(self):
+        text = pr_workflow("a").replace(
+            "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}",
+            "${{ matrix.big && 'blacksmith-8vcpu-ubuntu-2404' || 'blacksmith-2vcpu-ubuntu-2404' }}",
+        )
+        self.assertIn("oversized-paid-runner", rules(run(text)))
+
+    def test_vars_ci_runner_expression_passes(self):
+        self.assertNotIn("oversized-paid-runner", rules(run(pr_workflow("a"))))
+
+    def test_inline_justification_silences_the_warning(self):
+        text = pr_workflow("a").replace(
+            "    runs-on: ${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}\n",
+            "    # estate-checks-allow: oversized-paid-runner compile needs 16 cores\n"
+            "    runs-on: blacksmith-16vcpu-ubuntu-2404\n",
+        )
+        self.assertNotIn("oversized-paid-runner", rules(run(text)))
+
+
+class BoatDiskReady(unittest.TestCase):
+    def test_ci_runner_job_without_disk_ready_is_reported(self):
+        text = pr_workflow("a").replace(
+            "      - uses: Automancer-Ltd/estate-checks/disk-ready@v1\n", ""
+        )
+        findings = run(text)
+        self.assertIn("boat-missing-disk-ready", rules(findings))
+
+    def test_ci_runner_job_with_disk_ready_passes(self):
+        self.assertNotIn("boat-missing-disk-ready", rules(run(pr_workflow("a"))))
+
+    def test_literal_runner_job_is_not_judged(self):
+        text = pr_workflow("a").replace(
+            "      - uses: Automancer-Ltd/estate-checks/disk-ready@v1\n", ""
+        ).replace(
+            "${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}", "ubuntu-latest"
+        )
+        findings = run(text, owner=PERSONAL)
+        self.assertNotIn("boat-missing-disk-ready", rules(findings))
+
+    def test_local_disk_ready_path_counts(self):
+        text = pr_workflow("a").replace(
+            "      - uses: Automancer-Ltd/estate-checks/disk-ready@v1\n",
+            "      - uses: ./disk-ready\n",
+        )
+        self.assertNotIn("boat-missing-disk-ready", rules(run(text)))
+
+    def test_tiny_gate_job_without_repo_commands_passes(self):
+        text = PR_BASE + """  gate:
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 20
+    steps:
+      - run: echo "gate ok"
+"""
+        self.assertNotIn("boat-missing-disk-ready", rules(run(text)))
+
+    def test_reusable_caller_is_not_judged(self):
+        text = PR_BASE + "  a:\n    uses: ./.github/workflows/r.yml\n"
+        self.assertNotIn("boat-missing-disk-ready", rules(run(text)))
+
+
+class ReadyForReview(unittest.TestCase):
+    def test_ready_for_review_type_is_reported(self):
+        text = pr_workflow("a").replace(
+            "  pull_request:\n",
+            "  pull_request:\n    types: [opened, synchronize, ready_for_review]\n",
+        )
+        findings = run(text)
+        self.assertIn("pr-ready-for-review-trigger", rules(findings))
+
+    def test_default_types_pass(self):
+        text = pr_workflow("a").replace(
+            "  pull_request:\n",
+            "  pull_request:\n    types: [opened, synchronize, reopened]\n",
+        )
+        self.assertNotIn("pr-ready-for-review-trigger", rules(run(text)))
+
+    def test_bare_pull_request_trigger_passes(self):
+        self.assertNotIn("pr-ready-for-review-trigger", rules(run(pr_workflow("a"))))
+
+    def test_no_pull_request_trigger_is_not_judged(self):
+        text = pr_workflow("a").replace("  pull_request:\n", "")
+        self.assertNotIn("pr-ready-for-review-trigger", rules(run(text)))
+
+
+class UnguardedDeployJob(unittest.TestCase):
+    def _deploy_job(self, if_clause=""):
+        if_line = f"    if: {if_clause}\n" if if_clause else ""
+        return (
+            "  deploy:\n"
+            + if_line
+            + "    runs-on: ${{ fromJSON(vars.CI_RUNNER || '\"ubuntu-latest\"') }}\n"
+            "    timeout-minutes: 20\n    steps:\n"
+            "      - uses: Automancer-Ltd/estate-checks/disk-ready@v1\n"
+            "      - run: ./deploy.sh\n"
+        )
+
+    def test_unguarded_deploy_job_is_reported(self):
+        findings = run(PR_BASE + self._deploy_job())
+        self.assertIn("unguarded-deploy-job", rules(findings))
+
+    def test_guarded_deploy_job_passes(self):
+        text = PR_BASE + self._deploy_job(
+            "github.event_name == 'push' && github.ref == 'refs/heads/main'"
+        )
+        self.assertNotIn("unguarded-deploy-job", rules(run(text)))
+
+    def test_release_and_publish_names_are_reported(self):
+        for key in ("release", "publish-npm"):
+            job = self._deploy_job().replace("  deploy:", f"  {key}:")
+            self.assertIn("unguarded-deploy-job", rules(run(PR_BASE + job)), key)
+
+    def test_job_name_field_counts(self):
+        job = self._deploy_job().replace("  deploy:", "  ship:").replace(
+            "    runs-on:", "    name: Publish release\n    runs-on:"
+        )
+        self.assertIn("unguarded-deploy-job", rules(run(PR_BASE + job)))
+
+    def test_deploy_job_in_push_only_workflow_passes(self):
+        text = (PR_BASE + self._deploy_job()).replace("  pull_request:\n", "")
+        self.assertNotIn("unguarded-deploy-job", rules(run(text)))
+
+    def test_non_deploy_job_passes(self):
+        self.assertNotIn("unguarded-deploy-job", rules(run(pr_workflow("build", "test"))))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

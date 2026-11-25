@@ -55,7 +55,24 @@ EXPRESSION_VALUE = re.compile(r"(?:&&|\|\|)\s*\(?\s*(\d+)\b")
 PERSONAL_OWNERS = {"Waseemilyas"}
 HOSTED_LABEL = re.compile(r"^(ubuntu|macos|windows|blacksmith)-")
 
+OVERSIZED_RUNNER = re.compile(r"blacksmith-(?:8|16|32|64)vcpu", re.IGNORECASE)
+# An expression that scales the runner to 8+ vCPU: contains "blacksmith" and a
+# vcpu number of 8 or more, or a multiplication reaching it (e.g. 4vcpu * 2).
+EXPRESSION_SCALED_VCPU = re.compile(
+    r"blacksmith[^\"']*?(?:8|16|32|64)vcpu", re.IGNORECASE | re.DOTALL
+)
+DEPLOY_WORD = re.compile(r"deploy|release|publish", re.IGNORECASE)
+JUSTIFICATION = re.compile(
+    r"estate-checks-allow:\s*(pr-job-fanout|oversized-paid-runner|boat-missing-disk-ready|"
+    r"pr-ready-for-review-trigger|unguarded-deploy-job)\b"
+)
+
 TITLES = {
+    "pr-job-fanout": "More than 3 PR-eligible jobs in one workflow",
+    "oversized-paid-runner": "Oversized paid runner on a PR-triggered workflow",
+    "boat-missing-disk-ready": "vars.CI_RUNNER job lacks a disk-ready step",
+    "pr-ready-for-review-trigger": "pull_request types include ready_for_review",
+    "unguarded-deploy-job": "Deploy/release/publish job in a PR workflow without a job-level if",
     "job-missing-timeout": "Job declares no timeout-minutes",
     "job-timeout-below-floor": "Timeout below the 20-minute floor",
     "workflow-missing-concurrency": "Workflow declares no concurrency group",
@@ -81,6 +98,246 @@ def _scalars(node: Node | None) -> list[str]:
 
 def _job_label(key: str) -> str:
     return f"job {key!r}"
+
+
+def _triggered_on_pr(doc: Node) -> Node | None:
+    """The pull_request trigger node when this workflow runs on pull requests, else None."""
+    from yaml.nodes import MappingNode, ScalarNode, SequenceNode
+
+    triggers, _line = find(doc, "on")
+    if isinstance(triggers, MappingNode):
+        node, _ln = find(triggers, "pull_request")
+        return node
+    if isinstance(triggers, SequenceNode):
+        for child in triggers.value:
+            if isinstance(child, ScalarNode) and child.value == "pull_request":
+                return child
+        return None
+    if isinstance(triggers, ScalarNode) and triggers.value == "pull_request":
+        return triggers
+    return None
+
+
+def _pull_request_types_line(pr_node: Node | None) -> tuple[list[str], int]:
+    """The on.pull_request.types values and the line of the types key, else ([], 0)."""
+    if pr_node is None:
+        return [], 0
+    types_node, types_line = find(pr_node, "types")
+    values = _scalars(types_node)
+    if not values:
+        # A single scalar `types: [x]` arrives as a sequence; a bare scalar too.
+        return [], 0
+    return values, types_line
+
+
+def _job_if(job: Node) -> str:
+    if_node, _line = find(job, "if")
+    values = _scalars(if_node)
+    return values[0] if values else ""
+
+
+def _pr_excluded_by_if(condition: str) -> bool:
+    """A job-level if that never runs on pull_request events (push/main-only)."""
+    lowered = condition.lower().replace(" ", "")
+    if not lowered or "pull_request" in lowered:
+        return False  # no condition, or it mentions PRs, so it can run on one
+    return "event_name=='push'" in lowered or "event_name!='pull_request'" in lowered
+
+
+def _source_lines(text: str) -> list[str]:
+    return text.splitlines()
+
+
+def _justified(lines: list[str], rule: str, line: int) -> bool:
+    """An inline justification comment on the key's own line or the two above it."""
+    window = lines[max(0, line - 3):line]
+    return any(JUSTIFICATION.search(raw) and rule in raw for raw in window)
+
+
+def _check_pr_job_fanout(doc: Node, path: str, lines: list[str], findings: list[Finding]) -> None:
+    if _triggered_on_pr(doc) is None:
+        return
+    jobs, jobs_line = find(doc, "jobs")
+    if jobs is None:
+        return
+    eligible: list[tuple[str, int]] = []
+    for job_key, job, job_line in items(jobs):
+        uses, _uses_line = find(job, "uses")
+        if uses is not None:
+            continue  # reusable-workflow caller: one billed start for a bounded unit
+        if _pr_excluded_by_if(_job_if(job)):
+            continue
+        eligible.append((job_key, job_line))
+    if len(eligible) <= 3:
+        return
+    if any(_justified(lines, "pr-job-fanout", line) for _key, line in eligible):
+        return
+    names = ", ".join(repr(key) for key, _line in eligible)
+    findings.append(
+        Finding(
+            "pr-job-fanout",
+            path,
+            eligible[3][1] if len(eligible) > 3 else jobs_line,
+            f"This pull-request workflow defines {len(eligible)} PR-eligible jobs ({names}). "
+            "Every job is a billed runner start; wide fan-out exhausts the shared boat.dev "
+            "daily starts cap and evicts the whole org onto paid runners. Keep PR jobs at 3 "
+            "or fewer: fold matrix-less jobs into one sequential job, or justify the split "
+            "inline with `# estate-checks-allow: pr-job-fanout <reason>`.",
+        )
+    )
+
+
+def _check_oversized_runner(doc: Node, path: str, lines: list[str], findings: list[Finding]) -> None:
+    if _triggered_on_pr(doc) is None:
+        return
+    jobs, _jobs_line = find(doc, "jobs")
+    if jobs is None:
+        return
+    for job_key, job, _job_line in items(jobs):
+        uses, _uses_line = find(job, "uses")
+        if uses is not None:
+            continue
+        if _pr_excluded_by_if(_job_if(job)):
+            continue
+        runs_on, runs_line = find(job, "runs-on")
+        values: list[str] = _scalars(runs_on)
+        hit: str | None = next((v for v in values if OVERSIZED_RUNNER.search(v)), None)
+        if hit is None:
+            hit = next(
+                (v for v in values if "blacksmith" in v and EXPRESSION_SCALED_VCPU.search(v)),
+                None,
+            )
+        if hit is None:
+            continue
+        if _justified(lines, "oversized-paid-runner", runs_line):
+            continue
+        findings.append(
+            Finding(
+                "oversized-paid-runner",
+                path,
+                runs_line,
+                f"{_job_label(job_key)} runs pull-request checks on {hit.strip()!r}, an 8+ vCPU "
+                "paid runner: billed minutes multiply 4x-16x against the 2vcpu default, and "
+                "draft PR runs pay it too. PR checks belong on the smallest runner that fits "
+                "(vars.CI_RUNNER); justify a big one inline with "
+                "`# estate-checks-allow: oversized-paid-runner <reason>`.",
+            )
+        )
+
+
+def _job_steps(job: Node) -> Node | None:
+    steps, _line = find(job, "steps")
+    return steps
+
+
+def _step_text(step: Node) -> str:
+    """The uses/run/shell-relevant text of one step mapping."""
+    parts: list[str] = []
+    for key in ("uses", "run"):
+        node, _line = find(step, key)
+        parts.extend(_scalars(node))
+    return "\n".join(parts)
+
+
+def _check_boat_disk_ready(doc: Node, path: str, findings: list[Finding]) -> None:
+    jobs, _jobs_line = find(doc, "jobs")
+    if jobs is None:
+        return
+    for job_key, job, job_line in items(jobs):
+        uses, _uses_line = find(job, "uses")
+        if uses is not None:
+            continue
+        runs_on, _runs_line = find(job, "runs-on")
+        if not any("vars.CI_RUNNER" in v for v in _scalars(runs_on)):
+            continue
+        steps = _job_steps(job)
+        if steps is None:
+            continue
+        from yaml.nodes import MappingNode, SequenceNode
+
+        step_nodes = (
+            [child for child in steps.value if isinstance(child, MappingNode)]
+            if isinstance(steps, SequenceNode)
+            else []
+        )
+        texts = [_step_text(step) for step in step_nodes]
+        if any("estate-checks/disk-ready" in t or re.search(r"uses.*(^|[/\s])\./disk-ready\b", t) or "./disk-ready" in t for t in texts):
+            continue
+        runs_repo_commands = any(
+            "actions/checkout" in t
+            or re.search(r"(^|\n)\s*(?!uses\b)(\./|scripts/|bash\s|sh\s|python\d*\s|uv\s|npm\s|npx\s|make\s)", t)
+            for t in texts
+        )
+        if not runs_repo_commands:
+            continue  # a tiny gate job running no repo commands never touches the disk
+        findings.append(
+            Finding(
+                "boat-missing-disk-ready",
+                path,
+                job_line,
+                f"{_job_label(job_key)} reads vars.CI_RUNNER, so it can land on a boat.dev "
+                "runner, but no step uses Automancer-Ltd/estate-checks/disk-ready before the "
+                "work. A boat job can start while the snapshot disk is still swapping in and "
+                "die with uv_cwd / 'Unable to read current working directory'. Put "
+                "`- uses: Automancer-Ltd/estate-checks/disk-ready@v1` as the first step, "
+                "before actions/checkout.",
+            )
+        )
+
+
+def _check_ready_for_review(doc: Node, path: str, findings: list[Finding]) -> None:
+    pr = _triggered_on_pr(doc)
+    if pr is None:
+        return
+    from yaml.nodes import MappingNode
+
+    if not isinstance(pr, MappingNode):
+        return  # bare `on: pull_request` or sequence form: all default types, no types key
+    types, types_line = _pull_request_types_line(pr)
+    if "ready_for_review" not in types:
+        return
+    findings.append(
+        Finding(
+            "pr-ready-for-review-trigger",
+            path,
+            types_line,
+            "`on.pull_request.types` includes ready_for_review, so marking a draft PR ready "
+            "pays a second full run even though the draft already ran the required checks "
+            "(opened/synchronize cover every pushed commit). Drop ready_for_review from the "
+            "list, or drop types entirely for the default set.",
+        )
+    )
+
+
+def _check_unguarded_deploy(doc: Node, path: str, findings: list[Finding]) -> None:
+    if _triggered_on_pr(doc) is None:
+        return
+    jobs, _jobs_line = find(doc, "jobs")
+    if jobs is None:
+        return
+    for job_key, job, job_line in items(jobs):
+        uses, _uses_line = find(job, "uses")
+        if uses is not None:
+            continue
+        name_node, _name_line = find(job, "name")
+        names = [job_key] + _scalars(name_node)
+        if not any(DEPLOY_WORD.search(n) for n in names):
+            continue
+        if_node, _if_line = find(job, "if")
+        if if_node is not None and _scalars(if_node):
+            continue
+        findings.append(
+            Finding(
+                "unguarded-deploy-job",
+                path,
+                job_line,
+                f"{_job_label(job_key)} looks like a deploy/release/publish job in a workflow "
+                "that runs on pull requests, but declares no job-level `if:`. The runner "
+                "still starts on every PR — paying for a runner that only skips its steps. "
+                "Guard the job itself, e.g. `if: github.event_name == 'push' && "
+                "github.ref == refs/heads/main'`.",
+            )
+        )
 
 
 def _check_jobs(doc: Node, path: str, owner: str, findings: list[Finding]) -> None:
@@ -330,10 +587,16 @@ def check_workflow(
                 )
             )
             continue
+        lines = _source_lines(text)
         _check_jobs(doc, path, owner, findings)
         _check_concurrency(doc, path, findings)
         _check_push(doc, path, default_branch, findings)
         _check_schedule(doc, path, findings)
+        _check_pr_job_fanout(doc, path, lines, findings)
+        _check_oversized_runner(doc, path, lines, findings)
+        _check_boat_disk_ready(doc, path, findings)
+        _check_ready_for_review(doc, path, findings)
+        _check_unguarded_deploy(doc, path, findings)
     return findings
 
 
