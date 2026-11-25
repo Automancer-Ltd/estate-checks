@@ -61,6 +61,10 @@ OVERSIZED_RUNNER = re.compile(r"blacksmith-(?:8|16|32|64)vcpu", re.IGNORECASE)
 EXPRESSION_SCALED_VCPU = re.compile(
     r"blacksmith[^\"']*?(?:8|16|32|64)vcpu", re.IGNORECASE | re.DOTALL
 )
+# A full commit SHA is the only ``uses:`` ref nobody can move (t26558).
+COMMIT_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
+EXPRESSION = re.compile(r"\$\{\{(.*?)\}\}", re.DOTALL)
+SECRET_REF = re.compile(r"\bsecrets\b(?:\s*\.\s*([A-Za-z_][\w-]*)|\s*\[\s*['\"]([^'\"]*)['\"]\s*\])?")
 DEPLOY_WORD = re.compile(r"deploy|release|publish", re.IGNORECASE)
 JUSTIFICATION = re.compile(
     r"estate-checks-allow:\s*(pr-job-fanout|oversized-paid-runner|boat-missing-disk-ready|"
@@ -73,6 +77,7 @@ TITLES = {
     "boat-missing-disk-ready": "vars.CI_RUNNER job lacks a disk-ready step",
     "pr-ready-for-review-trigger": "pull_request types include ready_for_review",
     "unguarded-deploy-job": "Deploy/release/publish job in a PR workflow without a job-level if",
+    "tag-pinned-action-in-secret-job": "Secret-holding job runs an action by a movable tag",
     "job-missing-timeout": "Job declares no timeout-minutes",
     "job-timeout-below-floor": "Timeout below the 20-minute floor",
     "workflow-missing-concurrency": "Workflow declares no concurrency group",
@@ -239,6 +244,116 @@ def _step_text(step: Node) -> str:
     return "\n".join(parts)
 
 
+def _all_scalars(node: Node | None) -> list[str]:
+    """Every scalar under a node, keys included, depth first."""
+    from yaml.nodes import MappingNode, ScalarNode, SequenceNode
+
+    out: list[str] = []
+    stack: list[Node] = [node] if node is not None else []
+    seen: set[int] = set()
+    while stack:
+        current = stack.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, ScalarNode):
+            out.append(current.value)
+        elif isinstance(current, SequenceNode):
+            stack.extend(reversed(current.value))
+        elif isinstance(current, MappingNode):
+            for key, value in reversed(current.value):
+                stack.extend((value, key))
+    return out
+
+
+def _reads_secret(texts: list[str]) -> bool:
+    """True when an expression reads any secret other than GITHUB_TOKEN."""
+    for text in texts:
+        for body in EXPRESSION.findall(text):
+            for match in SECRET_REF.finditer(body):
+                name = match.group(1) or match.group(2)
+                if name is None or name.upper() != "GITHUB_TOKEN":
+                    return True  # a named secret, or `toJSON(secrets)`: every one
+    return False
+
+
+def _workflow_env_reads_secret(doc: Node) -> bool:
+    env, _line = find(doc, "env")
+    return _reads_secret(_all_scalars(env))
+
+
+def _job_holds_secret(job: Node, workflow_env_secret: bool) -> bool:
+    """A job that reads a non-GITHUB_TOKEN secret, inherits every secret, or names
+    an environment (whose secrets and protection exist to guard a deploy key)."""
+    if workflow_env_secret:
+        return True
+    environment, _line = find(job, "environment")
+    if environment is not None:
+        return True
+    inherited, _line = find(job, "secrets")
+    if _scalars(inherited) == ["inherit"]:
+        return True
+    return _reads_secret(_all_scalars(job))
+
+
+def _movable_ref(uses: str) -> bool:
+    """True when a ``uses:`` value names an action or workflow by anything but a commit."""
+    value = uses.strip()
+    if value.startswith("./"):
+        return False  # this repository's own file, at the commit being run
+    if value.startswith("docker://"):
+        return "@sha256:" not in value
+    _name, sep, ref = value.rpartition("@")
+    return not sep or not COMMIT_SHA.match(ref.strip())
+
+
+def _check_tag_pinned_in_secret_job(doc: Node, path: str, findings: list[Finding]) -> None:
+    """t26558: a tag is a name its repository's writers can move, and the next run
+    executes whatever it points at. A job that holds a deploy key must name every
+    action by a 40-character commit, so moving a tag cannot reach the key."""
+    from yaml.nodes import MappingNode, SequenceNode
+
+    jobs, _jobs_line = find(doc, "jobs")
+    if jobs is None:
+        return
+    workflow_env_secret = _workflow_env_reads_secret(doc)
+    for job_key, job, _job_line in items(jobs):
+        if not _job_holds_secret(job, workflow_env_secret):
+            continue
+        refs: list[tuple[str, int]] = []
+        caller, caller_line = find(job, "uses")
+        refs.extend((value, caller_line) for value in _scalars(caller))
+        steps = _job_steps(job)
+        if isinstance(steps, SequenceNode):
+            for step in steps.value:
+                if isinstance(step, MappingNode):
+                    uses, uses_line = find(step, "uses")
+                    refs.extend((value, uses_line) for value in _scalars(uses))
+        for value, line in refs:
+            if not _movable_ref(value):
+                continue
+            name, _sep, ref = value.strip().rpartition("@")
+            source = name.split("/")[0:2] if not value.startswith("docker://") else []
+            lookup = (
+                f" (`gh api repos/{'/'.join(source)}/commits/{ref} --jq .sha`)"
+                if len(source) == 2 and ref
+                else ""
+            )
+            findings.append(
+                Finding(
+                    "tag-pinned-action-in-secret-job",
+                    path,
+                    line,
+                    f"{_job_label(job_key)} holds a secret other than GITHUB_TOKEN (or names an "
+                    f"environment), but runs {value.strip()!r} by a tag or branch. Anyone who can "
+                    "write to that repository, or a leaked token of an app installed there, can "
+                    "move the name, and the next run executes the new code beside the key. Pin it "
+                    "by its 40-character commit SHA with the tag in a comment, "
+                    f"`uses: {name or value.strip()}@<sha> # {ref or 'tag'}`{lookup}.",
+                )
+            )
+
+
 def _check_boat_disk_ready(doc: Node, path: str, findings: list[Finding]) -> None:
     jobs, _jobs_line = find(doc, "jobs")
     if jobs is None:
@@ -270,6 +385,14 @@ def _check_boat_disk_ready(doc: Node, path: str, findings: list[Finding]) -> Non
         )
         if not runs_repo_commands:
             continue  # a tiny gate job running no repo commands never touches the disk
+        pin = (
+            "`- uses: Automancer-Ltd/estate-checks/disk-ready@<sha> # v1.x.y`, pinned by the "
+            "40-character commit of a release (`gh api "
+            "repos/Automancer-Ltd/estate-checks/commits/v1 --jq .sha`) because this job holds "
+            "a secret and a tag can be moved,"
+            if _job_holds_secret(job, _workflow_env_reads_secret(doc))
+            else "`- uses: Automancer-Ltd/estate-checks/disk-ready@v1`"
+        )
         findings.append(
             Finding(
                 "boat-missing-disk-ready",
@@ -279,8 +402,7 @@ def _check_boat_disk_ready(doc: Node, path: str, findings: list[Finding]) -> Non
                 "runner, but no step uses Automancer-Ltd/estate-checks/disk-ready before the "
                 "work. A boat job can start while the snapshot disk is still swapping in and "
                 "die with uv_cwd / 'Unable to read current working directory'. Put "
-                "`- uses: Automancer-Ltd/estate-checks/disk-ready@v1` as the first step, "
-                "before actions/checkout.",
+                f"{pin} as the first step, before actions/checkout.",
             )
         )
 
@@ -597,6 +719,7 @@ def check_workflow(
         _check_boat_disk_ready(doc, path, findings)
         _check_ready_for_review(doc, path, findings)
         _check_unguarded_deploy(doc, path, findings)
+        _check_tag_pinned_in_secret_job(doc, path, findings)
     return findings
 
 

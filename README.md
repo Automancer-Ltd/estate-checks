@@ -89,6 +89,19 @@ Two of the five accept an inline justification comment on the key line or the tw
 because a legitimate exception exists and lives with the workflow: `# estate-checks-allow:
 pr-job-fanout <reason>` and `# estate-checks-allow: oversized-paid-runner <reason>`.
 
+### Supply-chain pin for secret-holding jobs (t26558)
+
+| Annotation | What is wrong |
+| --- | --- |
+| `tag-pinned-action-in-secret-job` | a job that reads a secret other than `GITHUB_TOKEN` (an expression naming `secrets.X`, `secrets['X']` or `toJSON(secrets)`, `secrets: inherit`, or a workflow-level `env:` that does), or names an `environment:`, runs a `uses:` that is not a 40-character commit SHA. A tag or branch is a name that anyone with write access to the action's repository, or a leaked token of an app installed there, can move; the next run then executes the new code in the job that holds the key. Local `./` actions are exempt; a `docker://` image needs an `@sha256:` digest |
+
+Pin with the tag in a comment, for example
+`- uses: Automancer-Ltd/estate-checks/disk-ready@93fc81caea466d4bd7eb5ecd830ef4f793c2372a # v1.9.3`;
+`gh api repos/OWNER/REPO/commits/TAG --jq .sha` gives the commit. In such a job the
+`boat-missing-disk-ready` hint suggests this form instead of `@v1`. There is no justification
+comment: a job that must follow a moving tag can hold no secret. Jobs that hold no secret may keep
+following `v1`.
+
 The two rules that need judgement stay in the skill, not here: the five-minute target for a warm run is
 measured over a whole run and never enforced by cancelling (this check only reads the declared limits), and a deploy scheduler keeping its own
 group with `cancel-in-progress: false` is correct while a test workflow needs the standard block.
@@ -364,5 +377,8 @@ steps:
   - uses: Automancer-Ltd/estate-checks/disk-ready@v1
   - uses: actions/checkout@v7
 ```
+
+A job that holds a deploy key or names an environment pins it by a release's commit instead
+(`@<sha> # v1.x.y`), as every other action in that job (`tag-pinned-action-in-secret-job`, t26558).
 
 It runs the same test as `boat-job` (t10986): `/var/lib/ascii-lazy` absent, or `hydration-done` present, no `active` marker, and the workspace filesystem not fuse. It waits up to `timeout` seconds (default 180) and then fails the job. Where `/var/lib/ascii-lazy` does not exist (GitHub-hosted, Blacksmith) it returns at once. Roll back by removing the step.
