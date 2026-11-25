@@ -124,6 +124,7 @@ class FakeApi:
 
     def __init__(self, routes):
         self.routes = routes
+        self.repo = "o/r"
 
     def get(self, path):
         for prefix, body in self.routes.items():
@@ -481,6 +482,30 @@ class ReleaseEvents(unittest.TestCase):
             with self.subTest(name=name, ref=event.get("ref")):
                 result = run_main(name, event, {}, {"README.md": ""})
                 self.assertEqual(result["tier"], STANDARD)
+
+    def test_push_reuses_only_a_same_tree_standard_successful_ci_gate(self):
+        routes = {
+            f"git/commits/{MERGE}": {"tree": {"sha": TESTED_TREE}},
+            f"git/commits/{HEAD}": {"tree": {"sha": TESTED_TREE}},
+            "actions/runs?": {"workflow_runs": [{"id": 42, "event": "pull_request", "conclusion": "success",
+                                                    "head_sha": HEAD, "head_repository": {"full_name": "o/r"}}]},
+            "actions/runs/42/jobs": {"jobs": [{"id": 7, "name": "ci", "conclusion": "success"}]},
+            "check-runs/7/annotations": [{"title": "ci-tier", "message": f"tier=standard tested-tree={TESTED_TREE}"}],
+        }
+        result = run_main("push", PUSH, routes)
+        self.assertEqual(result["tier"], NONE)
+        self.assertIn("42", result["reason"])
+        for key, value in [
+            (f"git/commits/{HEAD}", {"tree": {"sha": OTHER_TREE}}),
+            ("actions/runs?", {"workflow_runs": []}),
+            ("actions/runs?", RuntimeError("API unavailable")),
+            ("actions/runs/42/jobs", {"jobs": [{"id": 7, "name": "ci", "conclusion": "failure"}]}),
+            ("check-runs/7/annotations", [{"title": "ci-tier", "message": f"tier=core tested-tree={TESTED_TREE}"}]),
+            ("check-runs/7/annotations", []),
+        ]:
+            with self.subTest(key=key, value=value):
+                self.assertEqual(run_main("push", PUSH, {**routes, key: value})["tier"], STANDARD)
+        self.assertEqual(run_main("push", PUSH, routes, extra_env={"INPUT_CI_FULL": "1"})["tier"], STANDARD)
 
     def test_ci_full_variable_forces_the_full_suite_on_a_docs_only_pull_request(self):
         event, routes = pr([changed("README.md", 3)])

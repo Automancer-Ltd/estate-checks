@@ -528,13 +528,13 @@ class Decision:
     files: list[ChangedFile] = field(default_factory=list)
     labels: list[str] = field(default_factory=list)
     direct_tests: list[str] = field(default_factory=list)  # core tier only
+    reused_run: int | None = None
 
 
 def decide(event_name: str, event: dict[str, Any], cfg: Config, api: Api, github_sha: str,
            default_branch_ref: str, ci_full: str = "") -> Decision:
-    """Only a pull request can run less than the full suite. A manual dispatch, a push to the
-    default branch or a tag is what a release proof and a deploy rest on: a green run of the
-    exact tree must mean the full suite ran (t20703)."""
+    """Dispatch and tags run the full suite (t20703). A default-branch push may reuse
+    a successful same-repository PR ci gate that ran standard on the identical tree."""
     if ci_full.strip():
         return Decision(STANDARD, "repository variable CI_FULL is set")
     if event_name == "pull_request":
@@ -548,7 +548,22 @@ def decide(event_name: str, event: dict[str, Any], cfg: Config, api: Api, github
     if event_name == "push" and ref.startswith("refs/tags/"):
         return Decision(STANDARD, "a tag always runs the full suite")
     if event_name == "push" and ref == default_branch_ref:
-        return Decision(STANDARD, "a push to the default branch always runs the full suite")
+        tree = tree_of(api, github_sha)
+        for run in api.paged("actions/runs?event=pull_request&status=success", "workflow_runs"):
+            head_repo: dict[str, Any] = run.get("head_repository") or {}
+            if (run.get("event") != "pull_request" or run.get("conclusion") != "success"
+                    or head_repo.get("full_name") != api.repo):
+                continue
+            if tree_of(api, run["head_sha"]) != tree:
+                continue
+            for job in api.paged(f"actions/runs/{run['id']}/jobs", "jobs"):
+                if job.get("conclusion") != "success":
+                    continue
+                annotations = api.paged(f"check-runs/{job['id']}/annotations")
+                if any(a.get("title") == NOTICE_TITLE and
+                       a.get("message") == f"tier=standard tested-tree={tree}" for a in annotations):
+                    return Decision(NONE, f"reused standard pull request run {run['id']}", reused_run=run["id"])
+        return Decision(STANDARD, "no same-tree standard pull request pass found")
     return Decision(STANDARD, f"event {event_name} always runs the full suite")
 
 
@@ -678,7 +693,8 @@ def main(argv: list[str], environ: Mapping[str, str] = os.environ,
     tier, reason = d.tier, safe_reason(d.reason)
     print(f"Tier: {tier} — {reason}")
     # Every run records its tier: ci-proof.sh accepts a dispatch whose tier was none (t6378).
-    print(f"::notice title={NOTICE_TITLE}::tier={tier}" + (f" tested-tree={d.tested_tree}" if d.tested_tree else ""))
+    print(f"::notice title={NOTICE_TITLE}::tier={tier}" + (f" tested-tree={d.tested_tree}" if d.tested_tree else "")
+          + (f" reused-pr-run={d.reused_run}" if d.reused_run else ""))
     # Existing paths only: a deleted file has nothing to lint or test.
     changed = sorted({f.path for f in d.files if f.status != "removed"})
     # Deleted and old renamed paths too, for path filters: deleting a file under

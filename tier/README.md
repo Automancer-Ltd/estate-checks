@@ -12,16 +12,18 @@ rules, not a model: the same change always gets the same answer.
 |---|---|---|
 | `none` | a pull request whose every changed file is documentation that no code reads | nothing but the gate |
 | `core` | at most `small-max-files` non-doc files and `small-max-lines` changed lines, nothing that always needs the full suite, and at most `core-max-tests` test files naming the changed code | its quick job: lint, typecheck, and the tests in `direct-tests` (target under 2–3 minutes) |
-| `standard` | everything else, any event but a pull request (a manual dispatch, a push to the default branch, a tag), and any classification failure | its normal CI |
+| `standard` | everything else, dispatches, tags, unmatched pushes, and any classification failure | its normal CI |
 
 The label `ci:full` on a pull request forces `standard`, and so does a repository
 variable `CI_FULL` with any non-empty value. An action cannot read the `vars` context, so the
 workflow passes it: `ci-full: ${{ vars.CI_FULL }}` as an input of the tier step (a workflow-level
 `env: CI_FULL: ${{ vars.CI_FULL }}` works too). A repository that has not added that line ignores the variable.
 
-**Release proofs.** A dispatch, a push to the default branch and a tag are always `standard`, whatever
-the diff or an earlier pull-request run says, so a green run of the exact tree on those events means the
-full suite ran (t20703). The pull-request-to-main "already tested" skip no longer exists.
+**Release proofs.** Dispatches and tags always run `standard` (t20703). A push to the
+default branch may return `none` when a successful same-repository pull request run has
+the same head tree and its successful CI job records `tier=standard` for that tree.
+The notice names the reused PR run. Missing proof or an API error runs `standard`.
+`CI_FULL` also forces `standard`.
 
 **Unsure means full.** The quick job's test list comes from a name search, not the test runner's
 dependency graph. Where the search cannot place a change with confidence the tier is `standard`:
@@ -182,15 +184,14 @@ filter must run its step on `[]`:
 - **Pull request:** the PR's file list from the REST API. A rename counts as
   both its old and new path, so moving code into `docs/` is not docs, and a
   renamed or deleted code file is `standard`.
-- **Push to the default branch, dispatch, tag:** `standard`, with no API read. `ci-proof.sh` style
-  release proofs can rely on the `ci-tier` notice reading `tier=standard` for these events.
+- **Push to the default branch:** reuse a same-tree successful standard PR CI job,
+  or run `standard` if no proof is found.
+- **Dispatch or tag:** `standard`, without an API read.
 - **Anything else** (`schedule`, another branch, an API error, a failed checkout): `standard`. The action never fails the job.
 
 ## Wiring a workflow
 
-Use one job when the complete verdict is under about five minutes. A later push
-finds the PR run's tested-tree notice on any of its jobs, the one named `job-name`
-first, so passing `job-name` only saves API reads. Scanners run
+Use one job when the complete verdict is under about five minutes. A later push checks the successful PR job's tested-tree notice. Scanners run
 even on documentation-only changes. The job has no dependency or job-level
 condition, so it always reports and can be the required context.
 

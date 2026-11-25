@@ -25,8 +25,7 @@ No generated code or build is needed for symbol navigation.
 
 - Why only quick CI? `tier/classify.py:classify` decides `none/core/standard`;
   `_scan` checks doc readers, selects tests and escalates unmatched Convex files.
-- Why did a push, tag or dispatch run everything? `tier/classify.py:decide`: only a pull
-  request can run less (t20703). Why did a PR go full? `_scan` and `unsure_paths`.
+- Why did a push, tag or dispatch run everything? `tier/classify.py:decide`: a same-tree standard PR pass can be reused on a default-branch push; dispatches and tags run full (t20703). Why did a PR go full? `_scan` and `unsure_paths`.
 - Which tests run for file X? `direct_tests` uses `reference_keys`, relative
   imports and neighbouring test names. `tier/action.yml` exposes `direct-tests`.
 - Force full CI? `ci:full`, the `CI_FULL` repository variable, `full-paths` or size limits; see `tier/README.md`.
