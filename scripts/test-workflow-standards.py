@@ -586,5 +586,23 @@ class TagPinnedActionInSecretJob(unittest.TestCase):
         self.assertIn("disk-ready@v1`", hint[0].message)
 
 
+class OwnActionsPinTheirSteps(unittest.TestCase):
+    """A consumer that pins this repository's actions by commit (t26558) still runs
+    whatever a nested tag points at, so every composite here pins its own steps."""
+
+    def test_every_nested_uses_is_a_commit_or_local(self):
+        import yaml
+
+        loose = []
+        for manifest in ("action.yml", "tier/action.yml", "disk-ready/action.yml"):
+            with open(os.path.join(REPO_ROOT, manifest), encoding="utf-8") as handle:
+                steps = (yaml.safe_load(handle).get("runs") or {}).get("steps") or []
+            for step in steps:
+                uses = step.get("uses") if isinstance(step, dict) else None
+                if uses and ws._movable_ref(uses):
+                    loose.append(f"{manifest}: {uses}")
+        self.assertEqual(loose, [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
