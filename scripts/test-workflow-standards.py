@@ -497,5 +497,94 @@ class UnguardedDeployJob(unittest.TestCase):
         self.assertNotIn("unguarded-deploy-job", rules(run(pr_workflow("build", "test"))))
 
 
+SHA = "93fc81caea466d4bd7eb5ecd830ef4f793c2372a"
+SECRET_JOB = """  deploy:
+    if: github.event_name == 'push'
+    runs-on: ${{ fromJSON(vars.CI_RUNNER || '"ubuntu-latest"') }}
+    timeout-minutes: 20
+    steps:
+      - uses: Automancer-Ltd/estate-checks/disk-ready@v1.9.3
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: ./deploy.sh
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+"""
+PINNED = "Automancer-Ltd/estate-checks/disk-ready@" + SHA + " # v1.9.3"
+RULE = "tag-pinned-action-in-secret-job"
+
+
+class TagPinnedActionInSecretJob(unittest.TestCase):
+    """t26558: a moved tag runs new code beside a deploy key on the next run."""
+
+    def test_tag_pinned_action_in_secret_job_is_reported_on_its_uses_line(self):
+        findings = [f for f in run(PR_BASE + SECRET_JOB) if f.rule == RULE]
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].line, 15)  # the disk-ready step
+        self.assertIn("disk-ready@<sha> # v1.9.3", findings[0].message)
+        self.assertIn("repos/Automancer-Ltd/estate-checks/commits/v1.9.3", findings[0].message)
+
+    def test_commit_pinned_secret_job_passes(self):
+        text = PR_BASE + SECRET_JOB.replace("Automancer-Ltd/estate-checks/disk-ready@v1.9.3", PINNED)
+        self.assertNotIn(RULE, rules(run(text)))
+
+    def test_github_token_alone_is_not_a_deploy_secret(self):
+        text = PR_BASE + SECRET_JOB.replace("secrets.CLOUDFLARE_API_TOKEN", "secrets.GITHUB_TOKEN")
+        self.assertNotIn(RULE, rules(run(text)))
+        text = PR_BASE + SECRET_JOB.replace("secrets.CLOUDFLARE_API_TOKEN", "github.token")
+        self.assertNotIn(RULE, rules(run(text)))
+
+    def test_every_other_secret_form_counts(self):
+        forms = {
+            "index": "${{ secrets['CLOUDFLARE_API_TOKEN'] }}",
+            "all": "${{ toJSON(secrets) }}",
+        }
+        for label, expr in forms.items():
+            text = PR_BASE + SECRET_JOB.replace("${{ secrets.CLOUDFLARE_API_TOKEN }}", expr)
+            self.assertIn(RULE, rules(run(text)), label)
+
+    def test_an_environment_makes_a_job_secret_holding(self):
+        job = SECRET_JOB.replace(
+            "        env:\n          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}\n", ""
+        ).replace("    timeout-minutes: 20\n", "    timeout-minutes: 20\n    environment: production\n")
+        self.assertIn(RULE, rules(run(PR_BASE + job)))
+
+    def test_workflow_env_secret_reaches_every_job(self):
+        text = PR_BASE.replace(
+            "jobs:\n", "env:\n  TOKEN: ${{ secrets.DAGGER_CLOUD_TOKEN }}\njobs:\n"
+        ) + JOB.format(key="build")
+        self.assertIn(RULE, rules(run(text)))
+
+    def test_job_without_a_secret_may_follow_a_tag(self):
+        self.assertNotIn(RULE, rules(run(pr_workflow("a"))))
+
+    def test_reusable_caller_passing_secrets_is_judged(self):
+        text = PR_BASE + (
+            "  a:\n    uses: Automancer-Ltd/shared/.github/workflows/deploy.yml@main\n"
+            "    secrets: inherit\n"
+            "  b:\n    uses: ./.github/workflows/local.yml\n    secrets: inherit\n"
+        )
+        findings = [f for f in run(text) if f.rule == RULE]
+        self.assertEqual(len(findings), 1)
+        self.assertIn("deploy.yml@main", findings[0].message)
+
+    def test_docker_image_needs_a_digest(self):
+        step = "      - uses: docker://alpine:3.20\n"
+        text = PR_BASE + SECRET_JOB.replace("Automancer-Ltd/estate-checks/disk-ready@v1.9.3", PINNED) + step
+        self.assertIn(RULE, rules(run(text)))
+        digest = "      - uses: docker://alpine@sha256:" + "a" * 64 + "\n"
+        text = PR_BASE + SECRET_JOB.replace("Automancer-Ltd/estate-checks/disk-ready@v1.9.3", PINNED) + digest
+        self.assertNotIn(RULE, rules(run(text)))
+
+    def test_missing_disk_ready_hint_suggests_the_commit_in_a_secret_job(self):
+        bare = SECRET_JOB.replace("      - uses: Automancer-Ltd/estate-checks/disk-ready@v1.9.3\n", "")
+        hint = [f for f in run(PR_BASE + bare) if f.rule == "boat-missing-disk-ready"]
+        self.assertEqual(len(hint), 1)
+        self.assertIn("disk-ready@<sha>", hint[0].message)
+        self.assertNotIn("disk-ready@v1`", hint[0].message)
+        plain = pr_workflow("a").replace("      - uses: Automancer-Ltd/estate-checks/disk-ready@v1\n", "")
+        hint = [f for f in run(plain) if f.rule == "boat-missing-disk-ready"]
+        self.assertIn("disk-ready@v1`", hint[0].message)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
