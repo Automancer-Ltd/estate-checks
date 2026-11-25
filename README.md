@@ -71,6 +71,24 @@ whatever `fail-on-findings` says for the unbounded-call scan.
 | `workflow-schedule-trigger` | 3 | `on:` includes `schedule`, so the workflow runs on a timer. Checks run once per change, on the pull request |
 | `workflow-unparsable` | — | the workflow could not be parsed, so it was not checked (never a silent pass) |
 
+### CI cost guards (November 2026 audit)
+
+Five further warn-only findings pin the anti-patterns behind ~$400+/mo of avoidable Blacksmith
+and GitHub Actions overflow in the 24–25 Nov 2026 spend audit. Each is annotated the same way —
+a warning, never a failure.
+
+| Annotation | What is wrong |
+| --- | --- |
+| `pr-job-fanout` | a `pull_request` workflow defines more than 3 PR-eligible jobs. Every job is a billed runner start; wide fan-out exhausts the shared boat.dev daily starts cap and evicts the whole org onto paid runners. Reusable-workflow callers and jobs gated to `push` events by their `if:` do not count |
+| `oversized-paid-runner` | a PR-eligible job's `runs-on` names (or an expression scales to) `blacksmith-8vcpu` or larger: billed minutes multiply 4x–16x, and draft PR runs pay it too |
+| `boat-missing-disk-ready` | a job reading `vars.CI_RUNNER` can land on boat.dev, but no step uses `Automancer-Ltd/estate-checks/disk-ready` (or the local `./disk-ready`) before checkout — the uv_cwd / disk-swap failure that previously forced repos off boat. Tiny gate jobs that run no repo commands are exempt |
+| `pr-ready-for-review-trigger` | `on.pull_request.types` includes `ready_for_review`, so marking a draft PR ready pays a second full run even though the draft already ran the required checks |
+| `unguarded-deploy-job` | in a PR-triggered workflow, a job whose id or name indicates deploy/release/publish declares no job-level `if:` — a paid runner still starts on every PR only to skip its steps |
+
+Two of the five accept an inline justification comment on the key line or the two lines above,
+because a legitimate exception exists and lives with the workflow: `# estate-checks-allow:
+pr-job-fanout <reason>` and `# estate-checks-allow: oversized-paid-runner <reason>`.
+
 The two rules that need judgement stay in the skill, not here: the five-minute target for a warm run is
 measured over a whole run and never enforced by cancelling (this check only reads the declared limits), and a deploy scheduler keeping its own
 group with `cancel-in-progress: false` is correct while a test workflow needs the standard block.
@@ -95,7 +113,9 @@ What the check deliberately does not judge, because a warning that is wrong gets
   and is not read.
 
 `on: schedule` has no exception: `testing`'s CI rule bans scheduled CI in every repository (Waseem,
-21 Oct 2026), and a comment in the workflow does not silence the warning.
+21 Oct 2026), and a comment in the workflow does not silence the warning. The same holds for the
+three cost guards with no justification form: a real exception is a redesign of the workflow, not
+a comment.
 
 Disable the check entirely on a repository that needs to deviate, and say why in that repository:
 
