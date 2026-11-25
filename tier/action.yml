@@ -112,7 +112,8 @@ runs:
     - name: Check out the code to finish classifying
       if: steps.plan.outputs.needs-scan == 'true' && steps.have-commit.outputs.reuse != 'true'
       continue-on-error: true
-      uses: actions/checkout@v7
+      # Consumers pin this action by commit in secret-holding jobs, so its own steps do too (t26558).
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         persist-credentials: false
         sparse-checkout: ${{ inputs.sparse-checkout }}
