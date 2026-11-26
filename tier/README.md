@@ -185,7 +185,10 @@ filter must run its step on `[]`:
   both its old and new path, so moving code into `docs/` is not docs, and a
   renamed or deleted code file is `standard`.
 - **Push to the default branch:** reuse a same-tree successful standard PR CI job,
-  or run `standard` if no proof is found.
+  or run `standard` if no proof is found. The lookup starts from the pull requests
+  that contain the pushed commit (`commits/{sha}/pulls`), reads at most three of them,
+  and at most three runs on each head, so a push with no proof makes a fixed handful
+  of API reads, not one per PR run (t26793).
 - **Dispatch or tag:** `standard`, without an API read.
 - **Anything else** (`schedule`, another branch, an API error, a failed checkout): `standard`. The action never fails the job.
 

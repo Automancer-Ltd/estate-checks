@@ -24,6 +24,11 @@ CORE: Literal["core"] = "core"
 STANDARD: Literal["standard"] = "standard"
 NOTICE_TITLE = "ci-tier"
 API_TIMEOUT_S = 15
+# A default-branch push looks for its reusable pass only among the pull requests that
+# contain the pushed commit, and among a few runs of each PR head (t26793). Fixed caps
+# keep a push with no pass to a handful of reads, whatever the repository's history.
+PULLS_PER_PUSH = 3
+RUNS_PER_HEAD = 3
 
 
 @dataclass(frozen=True)
@@ -520,6 +525,27 @@ def tree_of(api: Api, sha: str) -> str:
     return body["tree"]["sha"]
 
 
+def _standard_pass_run(api: Api, head_sha: str, tree: str) -> int | None:
+    """The id of a successful same-repository pull request run on `head_sha` that recorded
+    `tier=standard` for `tree`. Every run on one head has that head's tree, so the caller
+    checks the tree once per head. At most RUNS_PER_HEAD runs are read, newest first."""
+    runs = api.paged(f"actions/runs?head_sha={head_sha}&event=pull_request&status=success",
+                     "workflow_runs", limit=RUNS_PER_HEAD)
+    for run in runs[:RUNS_PER_HEAD]:
+        head_repo: dict[str, Any] = run.get("head_repository") or {}
+        if (run.get("event") != "pull_request" or run.get("conclusion") != "success"
+                or head_repo.get("full_name") != api.repo):
+            continue
+        for job in api.paged(f"actions/runs/{run['id']}/jobs", "jobs"):
+            if job.get("conclusion") != "success":
+                continue
+            annotations = api.paged(f"check-runs/{job['id']}/annotations")
+            if any(a.get("title") == NOTICE_TITLE and
+                   a.get("message") == f"tier=standard tested-tree={tree}" for a in annotations):
+                return int(run["id"])
+    return None
+
+
 @dataclass
 class Decision:
     tier: Literal["none", "core", "standard"]
@@ -549,20 +575,17 @@ def decide(event_name: str, event: dict[str, Any], cfg: Config, api: Api, github
         return Decision(STANDARD, "a tag always runs the full suite")
     if event_name == "push" and ref == default_branch_ref:
         tree = tree_of(api, github_sha)
-        for run in api.paged("actions/runs?event=pull_request&status=success", "workflow_runs"):
-            head_repo: dict[str, Any] = run.get("head_repository") or {}
-            if (run.get("event") != "pull_request" or run.get("conclusion") != "success"
-                    or head_repo.get("full_name") != api.repo):
+        pulls, _ = api.get(f"commits/{github_sha}/pulls")
+        for pr in pulls[:PULLS_PER_PUSH]:
+            head: dict[str, Any] = pr.get("head") or {}
+            head_repo: dict[str, Any] = head.get("repo") or {}
+            if not head.get("sha") or head_repo.get("full_name") != api.repo:
                 continue
-            if tree_of(api, run["head_sha"]) != tree:
+            if tree_of(api, head["sha"]) != tree:
                 continue
-            for job in api.paged(f"actions/runs/{run['id']}/jobs", "jobs"):
-                if job.get("conclusion") != "success":
-                    continue
-                annotations = api.paged(f"check-runs/{job['id']}/annotations")
-                if any(a.get("title") == NOTICE_TITLE and
-                       a.get("message") == f"tier=standard tested-tree={tree}" for a in annotations):
-                    return Decision(NONE, f"reused standard pull request run {run['id']}", reused_run=run["id"])
+            run_id = _standard_pass_run(api, head["sha"], tree)
+            if run_id is not None:
+                return Decision(NONE, f"reused standard pull request run {run_id}", reused_run=run_id)
         return Decision(STANDARD, "no same-tree standard pull request pass found")
     return Decision(STANDARD, f"event {event_name} always runs the full suite")
 

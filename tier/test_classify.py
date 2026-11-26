@@ -12,10 +12,13 @@ import unittest
 from classify import (
     CORE,
     NONE,
+    PULLS_PER_PUSH,
+    RUNS_PER_HEAD,
     STANDARD,
     ChangedFile,
     Config,
     classify,
+    decide,
     glob_to_regex,
     main,
     parse_list,
@@ -137,6 +140,18 @@ class FakeApi:
     def paged(self, path, key=None, limit=3000):
         body, _ = self.get(path)
         return body[key] if key else body
+
+
+class CountingApi(FakeApi):
+    """Records every read a decision makes, so a test can bound them."""
+
+    def __init__(self, routes):
+        super().__init__(routes)
+        self.paths: list[str] = []
+
+    def get(self, path):
+        self.paths.append(path)
+        return super().get(path)
 
 
 MERGE, HEAD, BEFORE, AFTER = "m" * 40, "h" * 40, "b" * 40, "a" * 40
@@ -487,6 +502,7 @@ class ReleaseEvents(unittest.TestCase):
         routes = {
             f"git/commits/{MERGE}": {"tree": {"sha": TESTED_TREE}},
             f"git/commits/{HEAD}": {"tree": {"sha": TESTED_TREE}},
+            f"commits/{MERGE}/pulls": [{"number": 9, "head": {"sha": HEAD, "repo": {"full_name": "o/r"}}}],
             "actions/runs?": {"workflow_runs": [{"id": 42, "event": "pull_request", "conclusion": "success",
                                                     "head_sha": HEAD, "head_repository": {"full_name": "o/r"}}]},
             "actions/runs/42/jobs": {"jobs": [{"id": 7, "name": "ci", "conclusion": "success"}]},
@@ -497,6 +513,8 @@ class ReleaseEvents(unittest.TestCase):
         self.assertIn("42", result["reason"])
         for key, value in [
             (f"git/commits/{HEAD}", {"tree": {"sha": OTHER_TREE}}),
+            (f"commits/{MERGE}/pulls", []),
+            (f"commits/{MERGE}/pulls", [{"number": 9, "head": {"sha": HEAD, "repo": {"full_name": "fork/r"}}}]),
             ("actions/runs?", {"workflow_runs": []}),
             ("actions/runs?", RuntimeError("API unavailable")),
             ("actions/runs/42/jobs", {"jobs": [{"id": 7, "name": "ci", "conclusion": "failure"}]}),
@@ -506,6 +524,46 @@ class ReleaseEvents(unittest.TestCase):
             with self.subTest(key=key, value=value):
                 self.assertEqual(run_main("push", PUSH, {**routes, key: value})["tier"], STANDARD)
         self.assertEqual(run_main("push", PUSH, routes, extra_env={"INPUT_CI_FULL": "1"})["tier"], STANDARD)
+
+    def test_a_push_with_no_reusable_pass_makes_a_bounded_number_of_reads(self):
+        """t26793: the lookup reads the PRs that contain the pushed commit and a few runs of
+        each, never every successful PR run in the repository. Twelve PRs on the pushed tree,
+        each with five runs and two successful jobs, still cost a fixed handful of reads."""
+        heads = [f"{n:040x}" for n in range(1, 13)]
+        routes = {
+            f"git/commits/{MERGE}": {"tree": {"sha": TESTED_TREE}},
+            f"commits/{MERGE}/pulls": [{"number": n, "head": {"sha": h, "repo": {"full_name": "o/r"}}}
+                                       for n, h in enumerate(heads, 1)],
+        }
+        job_id = 100
+        for n, head in enumerate(heads):
+            routes[f"git/commits/{head}"] = {"tree": {"sha": TESTED_TREE}}
+            runs = []
+            for r in range(5):
+                run_id = n * 10 + r
+                runs.append({"id": run_id, "event": "pull_request", "conclusion": "success",
+                             "head_sha": head, "head_repository": {"full_name": "o/r"}})
+                jobs = []
+                for _ in range(2):
+                    job_id += 1
+                    jobs.append({"id": job_id, "conclusion": "success"})
+                    routes[f"check-runs/{job_id}/annotations"] = [
+                        {"title": "ci-tier", "message": f"tier=core tested-tree={TESTED_TREE}"}]
+                routes[f"actions/runs/{run_id}/jobs"] = {"jobs": jobs}
+            routes[f"actions/runs?head_sha={head}"] = {"workflow_runs": runs}
+        api = CountingApi(routes)
+        decision = decide("push", PUSH, DEFAULTS, api, MERGE, "refs/heads/main")
+        self.assertEqual(decision.tier, STANDARD)
+        self.assertEqual(sum(p.startswith("actions/runs?") for p in api.paths), PULLS_PER_PUSH)
+        per_pr = 2 + RUNS_PER_HEAD * (1 + 2)
+        self.assertLessEqual(len(api.paths), 2 + PULLS_PER_PUSH * per_pr)
+        self.assertLess(len(api.paths), 12 * 5)
+
+        # A PR on another tree costs one tree read and nothing more.
+        mismatched = {**routes, **{f"git/commits/{h}": {"tree": {"sha": OTHER_TREE}} for h in heads}}
+        api = CountingApi(mismatched)
+        self.assertEqual(decide("push", PUSH, DEFAULTS, api, MERGE, "refs/heads/main").tier, STANDARD)
+        self.assertEqual(len(api.paths), 2 + PULLS_PER_PUSH)
 
     def test_ci_full_variable_forces_the_full_suite_on_a_docs_only_pull_request(self):
         event, routes = pr([changed("README.md", 3)])
